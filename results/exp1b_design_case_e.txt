@@ -1,0 +1,16 @@
+# magnitude: can any target behavior drive E|l_rev| below E|l_dyn|?  (C dynamics, grid over K and sigma_a)
+K -0.80 sigma_a 0.30 ratio  0.98        abs_dyn   1.408  abs_rev   1.382  rho   0.964  fn   0.000  fp   0.000  
+K -1.00 sigma_a 0.30 ratio  0.99        abs_dyn   1.411  abs_rev   1.395  rho   0.943  fn   0.000  fp   0.001  
+K -0.60 sigma_a 0.30 ratio  1.00        abs_dyn   1.409  abs_rev   1.409  rho   0.965  fn   0.000  fp   0.000  
+K -1.20 sigma_a 0.30 ratio  1.02        abs_dyn   1.419  abs_rev   1.442  rho   0.907  fn   0.003  fp   0.008  
+K -0.80 sigma_a 0.45 ratio  1.03        abs_dyn   1.436  abs_rev   1.479  rho   0.926  fn   0.006  fp   0.002  
+
+# ranking: target behavior noise sweep (C dynamics, K = source)
+sigma_a 0.30                            abs_dyn   1.408  abs_rev   1.382  rho   0.964  fn   0.000  fp   0.000  
+sigma_a 0.20                            abs_dyn   1.331  abs_rev   1.622  rho   0.832  fn   0.000  fp   0.059  
+sigma_a 0.15                            abs_dyn   1.268  abs_rev   2.234  rho   0.632  fn   0.026  fp   0.147  
+sigma_a 0.10                            abs_dyn   1.199  abs_rev   4.357  rho   0.351  fn   0.167  fp   0.257  
+sigma_a 0.05                            abs_dyn   1.130  abs_rev  17.083  rho   0.048  fn   0.400  fp   0.351  
+
+# chosen case E
+E                                       abs_dyn   1.199  abs_rev   4.357  rho   0.351  fn   0.167  fp   0.257  
