@@ -1,0 +1,11 @@
+case E seed 0, held-out source transitions split by analytic occupancy ratio log p_t(s,a)/p_s(s,a)
+tercile                           n mean|truth|  rho_rev rho_local rho_dara |err|_local |err|_dara
+off-support (low p_t/p_s)     16667       1.644    0.228     0.641    0.745       1.880      1.579
+middle                        16666       1.343    0.778     0.770    0.984       0.845      0.540
+on-support (high p_t/p_s)     16667       0.609    0.668     0.885    0.975       0.261      0.403
+
+fraction of the top-25% most shifted transitions in each tercile: [0.388, 0.449, 0.163]
+rev    false negatives: 1965 of 12500 shifted; share of those that are off-support tercile: 0.000; mean |local| on missed: 1.553, mean |truth| on missed: 1.901
+local  false negatives: 2750 of 12500 shifted; share of those that are off-support tercile: 0.851; mean |local| on missed: 0.383, mean |truth| on missed: 3.149
+
+mean action magnitude |a|: all 0.286 | top-25% shifted 0.452 | target data 0.121 | target 99th pct 0.458

@@ -1,62 +1,122 @@
-# Experiment 1: toy 四格矩阵，5 seeds
+# Experiment 1 / 1b: toy 矩阵 A–E，5 seeds
 
 日期 2026-10-15。设置：seed 0–4，steps 3000，K = 10 quantile bins，source 50k / target 5k，评估用 held-out source rollouts（seed+100，50k）。
 命令：`python -m toy.evaluate_ratio --seeds 5 --out results/exp1_toy_matrix_seeds5.csv`（本次为 5 个 `--seeds 1 --first_seed k` 并行进程，结果等价）。
-逐 seed 原始数据见 `exp1_toy_matrix_seeds5.csv`。
+逐 seed 原始数据见 `exp1_toy_matrix_seeds5.csv`。Case E 的构造和解读见 `exp1b_case_e.md`。
 
-## mean ± std（5 seeds）
+列说明：`*_rev` LoDADA reverse，`*_dara` DARA global（对 $s'$ 级真值），`*_local` ours，`*_rev_true` 解析算出的理想 reverse score（dyn + occ − marginal，无估计误差）。
+`fn_*`：真 discrepancy 前 25% 的样本中被该 score 排到后 50% 的比例（漏报）；`fp_*`：真 discrepancy 后 50% 的样本中被排到前 25% 的比例（误报）。
 
-| case | true_kl | abs_rev | abs_dara | abs_local | rho_rev | rho_local | rho_dara |
-|---|---|---|---|---|---|---|---|
-| A | 0.000 ± 0.000 | 0.189 ± 0.008 | 0.052 ± 0.015 | 0.048 ± 0.018 | nan | nan | nan |
-| B | 0.000 ± 0.000 | 0.605 ± 0.036 | 0.123 ± 0.033 | 0.062 ± 0.007 | nan | nan | nan |
-| C | 1.413 ± 0.018 | 1.556 ± 0.085 | 1.455 ± 0.056 | 1.231 ± 0.067 | 0.938 ± 0.008 | 0.966 ± 0.003 | 0.985 ± 0.004 |
-| D | 1.413 ± 0.018 | 1.765 ± 0.060 | 1.391 ± 0.049 | 1.147 ± 0.056 | 0.894 ± 0.005 | 0.965 ± 0.005 | 0.983 ± 0.006 |
+## magnitude（mean |log ratio|）
+
+| case | true_kl | abs_rev | abs_dara | abs_local | abs_rev_true |
+|---|---|---|---|---|---|
+| A | 0.000 ± 0.000 | 0.189 ± 0.008 | 0.052 ± 0.015 | 0.048 ± 0.018 | 0.000 ± 0.000 |
+| B | 0.000 ± 0.000 | 0.605 ± 0.036 | 0.123 ± 0.033 | 0.062 ± 0.007 | 0.468 ± 0.005 |
+| C | 1.413 ± 0.018 | 1.556 ± 0.085 | 1.455 ± 0.056 | 1.231 ± 0.067 | 1.382 ± 0.009 |
+| D | 1.413 ± 0.018 | 1.765 ± 0.060 | 1.391 ± 0.049 | 1.147 ± 0.056 | 1.673 ± 0.015 |
+| E | 1.413 ± 0.018 | 4.008 ± 0.156 | 1.224 ± 0.062 | 0.800 ± 0.035 | 4.395 ± 0.025 |
+
+## ranking（Spearman vs 真 ratio）
+
+| case | rho_rev | rho_local | rho_dara | rho_rev_true |
+|---|---|---|---|---|
+| A | nan | nan | nan | nan |
+| B | nan | nan | nan | nan |
+| C | 0.938 ± 0.008 | 0.966 ± 0.003 | 0.985 ± 0.004 | 0.964 ± 0.001 |
+| D | 0.894 ± 0.005 | 0.965 ± 0.005 | 0.983 ± 0.006 | 0.919 ± 0.001 |
+| E | 0.338 ± 0.017 | 0.703 ± 0.055 | 0.883 ± 0.016 | 0.350 ± 0.005 |
+
+## false negative rate
+
+| case | fn_rev | fn_local | fn_dara | fn_rev_true |
+|---|---|---|---|---|
+| A | nan | nan | nan | nan |
+| B | nan | nan | nan | nan |
+| C | 0.001 ± 0.001 | 0.000 ± 0.000 | 0.000 ± 0.000 | 0.000 ± 0.000 |
+| D | 0.002 ± 0.001 | 0.003 ± 0.002 | 0.000 ± 0.000 | 0.000 ± 0.000 |
+| E | 0.168 ± 0.011 | 0.202 ± 0.038 | 0.040 ± 0.011 | 0.165 ± 0.005 |
+
+## false positive rate
+
+| case | fp_rev | fp_local | fp_dara | fp_rev_true |
+|---|---|---|---|---|
+| A | nan | nan | nan | nan |
+| B | nan | nan | nan | nan |
+| C | 0.001 ± 0.000 | 0.000 ± 0.000 | 0.000 ± 0.000 | 0.000 ± 0.000 |
+| D | 0.004 ± 0.001 | 0.000 ± 0.000 | 0.000 ± 0.000 | 0.002 ± 0.000 |
+| E | 0.254 ± 0.009 | 0.055 ± 0.016 | 0.014 ± 0.006 | 0.257 ± 0.002 |
+
+## 逐 seed 检查
+
+```
+seed 0: B abs_rev/abs_local 11.5x | D rho_local-rho_rev +0.059 | E fn_rev 0.157 fn_local 0.220 rho_rev 0.340 rho_local 0.667
+seed 1: B abs_rev/abs_local 9.8x | D rho_local-rho_rev +0.067 | E fn_rev 0.155 fn_local 0.147 rho_rev 0.367 rho_local 0.777
+seed 2: B abs_rev/abs_local 9.4x | D rho_local-rho_rev +0.068 | E fn_rev 0.172 fn_local 0.174 rho_rev 0.331 rho_local 0.747
+seed 3: B abs_rev/abs_local 9.4x | D rho_local-rho_rev +0.076 | E fn_rev 0.171 fn_local 0.214 rho_rev 0.337 rho_local 0.699
+seed 4: B abs_rev/abs_local 9.4x | D rho_local-rho_rev +0.084 | E fn_rev 0.185 fn_local 0.256 rho_rev 0.317 rho_local 0.623
+```
 
 ## 逐 seed
 
-| seed | case | true_kl | abs_rev | abs_dara | abs_local | rho_rev | rho_local | rho_dara |
-|---|---|---|---|---|---|---|---|---|
-| 0 | A | 0.000 | 0.203 | 0.071 | 0.020 | nan | nan | nan |
-| 0 | B | 0.000 | 0.579 | 0.154 | 0.050 | nan | nan | nan |
-| 0 | C | 1.410 | 1.561 | 1.414 | 1.194 | 0.946 | 0.966 | 0.980 |
-| 0 | D | 1.410 | 1.836 | 1.352 | 1.118 | 0.898 | 0.958 | 0.986 |
-| 1 | A | 0.000 | 0.183 | 0.034 | 0.056 | nan | nan | nan |
-| 1 | B | 0.000 | 0.620 | 0.079 | 0.063 | nan | nan | nan |
-| 1 | C | 1.441 | 1.702 | 1.545 | 1.320 | 0.949 | 0.966 | 0.989 |
-| 1 | D | 1.441 | 1.740 | 1.418 | 1.210 | 0.900 | 0.967 | 0.988 |
-| 2 | A | 0.000 | 0.181 | 0.048 | 0.040 | nan | nan | nan |
-| 2 | B | 0.000 | 0.598 | 0.086 | 0.064 | nan | nan | nan |
-| 2 | C | 1.402 | 1.575 | 1.447 | 1.295 | 0.931 | 0.970 | 0.989 |
-| 2 | D | 1.402 | 1.775 | 1.373 | 1.209 | 0.896 | 0.964 | 0.988 |
-| 3 | A | 0.000 | 0.185 | 0.038 | 0.047 | nan | nan | nan |
-| 3 | B | 0.000 | 0.562 | 0.151 | 0.060 | nan | nan | nan |
-| 3 | C | 1.387 | 1.462 | 1.483 | 1.203 | 0.931 | 0.966 | 0.980 |
-| 3 | D | 1.387 | 1.812 | 1.474 | 1.137 | 0.888 | 0.964 | 0.975 |
-| 4 | A | 0.000 | 0.192 | 0.067 | 0.076 | nan | nan | nan |
-| 4 | B | 0.000 | 0.666 | 0.146 | 0.071 | nan | nan | nan |
-| 4 | C | 1.424 | 1.482 | 1.383 | 1.141 | 0.931 | 0.961 | 0.985 |
-| 4 | D | 1.424 | 1.664 | 1.340 | 1.064 | 0.887 | 0.972 | 0.977 |
+| seed | case | true_kl | abs_rev | abs_dara | abs_local | abs_rev_true | rho_rev | rho_local | rho_dara | rho_rev_true |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | A | 0.000 | 0.203 | 0.071 | 0.020 | 0.000 | nan | nan | nan | nan |
+| 0 | B | 0.000 | 0.579 | 0.154 | 0.050 | 0.468 | nan | nan | nan | nan |
+| 0 | C | 1.410 | 1.561 | 1.414 | 1.194 | 1.382 | 0.946 | 0.966 | 0.980 | 0.964 |
+| 0 | D | 1.410 | 1.836 | 1.352 | 1.118 | 1.671 | 0.898 | 0.958 | 0.986 | 0.920 |
+| 0 | E | 1.410 | 4.050 | 1.245 | 0.814 | 4.357 | 0.340 | 0.667 | 0.886 | 0.351 |
+| 1 | A | 0.000 | 0.183 | 0.034 | 0.056 | 0.000 | nan | nan | nan | nan |
+| 1 | B | 0.000 | 0.620 | 0.079 | 0.063 | 0.475 | nan | nan | nan | nan |
+| 1 | C | 1.441 | 1.702 | 1.545 | 1.320 | 1.399 | 0.949 | 0.966 | 0.989 | 0.964 |
+| 1 | D | 1.441 | 1.740 | 1.418 | 1.210 | 1.701 | 0.900 | 0.967 | 0.988 | 0.921 |
+| 1 | E | 1.441 | 4.069 | 1.287 | 0.861 | 4.429 | 0.367 | 0.777 | 0.913 | 0.344 |
+| 2 | A | 0.000 | 0.181 | 0.048 | 0.040 | 0.000 | nan | nan | nan | nan |
+| 2 | B | 0.000 | 0.598 | 0.086 | 0.064 | 0.463 | nan | nan | nan | nan |
+| 2 | C | 1.402 | 1.575 | 1.447 | 1.295 | 1.374 | 0.931 | 0.970 | 0.989 | 0.964 |
+| 2 | D | 1.402 | 1.775 | 1.373 | 1.209 | 1.659 | 0.896 | 0.964 | 0.988 | 0.919 |
+| 2 | E | 1.402 | 3.983 | 1.170 | 0.788 | 4.399 | 0.331 | 0.747 | 0.875 | 0.358 |
+| 3 | A | 0.000 | 0.185 | 0.038 | 0.047 | 0.000 | nan | nan | nan | nan |
+| 3 | B | 0.000 | 0.562 | 0.151 | 0.060 | 0.462 | nan | nan | nan | nan |
+| 3 | C | 1.387 | 1.462 | 1.483 | 1.203 | 1.381 | 0.931 | 0.966 | 0.980 | 0.963 |
+| 3 | D | 1.387 | 1.812 | 1.474 | 1.137 | 1.659 | 0.888 | 0.964 | 0.975 | 0.918 |
+| 3 | E | 1.387 | 3.732 | 1.284 | 0.759 | 4.381 | 0.337 | 0.699 | 0.868 | 0.346 |
+| 4 | A | 0.000 | 0.192 | 0.067 | 0.076 | 0.000 | nan | nan | nan | nan |
+| 4 | B | 0.000 | 0.666 | 0.146 | 0.071 | 0.472 | nan | nan | nan | nan |
+| 4 | C | 1.424 | 1.482 | 1.383 | 1.141 | 1.374 | 0.931 | 0.961 | 0.985 | 0.963 |
+| 4 | D | 1.424 | 1.664 | 1.340 | 1.064 | 1.674 | 0.887 | 0.972 | 0.977 | 0.918 |
+| 4 | E | 1.424 | 4.208 | 1.135 | 0.777 | 4.407 | 0.317 | 0.623 | 0.873 | 0.350 |
 
-## go/no-go 逐 seed 检查
-
-```
-seed 0: B abs_rev/abs_local = 11.5x, B abs_local vs A abs_local = 0.050 vs 0.020, D rho_local-rho_rev = +0.059
-seed 1: B abs_rev/abs_local = 9.8x, B abs_local vs A abs_local = 0.063 vs 0.056, D rho_local-rho_rev = +0.067
-seed 2: B abs_rev/abs_local = 9.4x, B abs_local vs A abs_local = 0.064 vs 0.040, D rho_local-rho_rev = +0.068
-seed 3: B abs_rev/abs_local = 9.4x, B abs_local vs A abs_local = 0.060 vs 0.047, D rho_local-rho_rev = +0.076
-seed 4: B abs_rev/abs_local = 9.4x, B abs_local vs A abs_local = 0.071 vs 0.076, D rho_local-rho_rev = +0.084
-
-```
+| seed | case | fn_rev | fn_local | fn_dara | fn_rev_true | fp_rev | fp_local | fp_dara | fp_rev_true |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | A | nan | nan | nan | nan | nan | nan | nan | nan |
+| 0 | B | nan | nan | nan | nan | nan | nan | nan | nan |
+| 0 | C | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 | 0.000 | 0.000 | 0.000 |
+| 0 | D | 0.001 | 0.006 | 0.000 | 0.000 | 0.004 | 0.000 | 0.000 | 0.001 |
+| 0 | E | 0.157 | 0.220 | 0.035 | 0.167 | 0.263 | 0.060 | 0.018 | 0.257 |
+| 1 | A | nan | nan | nan | nan | nan | nan | nan | nan |
+| 1 | B | nan | nan | nan | nan | nan | nan | nan | nan |
+| 1 | C | 0.001 | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 | 0.000 | 0.000 |
+| 1 | D | 0.003 | 0.004 | 0.000 | 0.000 | 0.004 | 0.000 | 0.000 | 0.001 |
+| 1 | E | 0.155 | 0.147 | 0.032 | 0.167 | 0.241 | 0.052 | 0.006 | 0.261 |
+| 2 | A | nan | nan | nan | nan | nan | nan | nan | nan |
+| 2 | B | nan | nan | nan | nan | nan | nan | nan | nan |
+| 2 | C | 0.002 | 0.000 | 0.000 | 0.000 | 0.001 | 0.000 | 0.000 | 0.000 |
+| 2 | D | 0.001 | 0.001 | 0.001 | 0.001 | 0.003 | 0.000 | 0.000 | 0.001 |
+| 2 | E | 0.172 | 0.174 | 0.031 | 0.155 | 0.257 | 0.026 | 0.013 | 0.254 |
+| 3 | A | nan | nan | nan | nan | nan | nan | nan | nan |
+| 3 | B | nan | nan | nan | nan | nan | nan | nan | nan |
+| 3 | C | 0.002 | 0.000 | 0.000 | 0.000 | 0.001 | 0.000 | 0.000 | 0.000 |
+| 3 | D | 0.001 | 0.002 | 0.000 | 0.000 | 0.003 | 0.000 | 0.000 | 0.002 |
+| 3 | E | 0.171 | 0.214 | 0.060 | 0.169 | 0.245 | 0.059 | 0.013 | 0.256 |
+| 4 | A | nan | nan | nan | nan | nan | nan | nan | nan |
+| 4 | B | nan | nan | nan | nan | nan | nan | nan | nan |
+| 4 | C | 0.001 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| 4 | D | 0.004 | 0.002 | 0.000 | 0.000 | 0.005 | 0.000 | 0.000 | 0.002 |
+| 4 | E | 0.185 | 0.256 | 0.045 | 0.165 | 0.262 | 0.076 | 0.023 | 0.257 |
 
 ## 结论
 
-- **第一关 Case B（只有 occupancy shift）通过**：reverse 的 `abs_rev` = 0.605 ± 0.036，corrected 的 `abs_local` = 0.062 ± 0.007，每个 seed 都相差约 10 倍；`abs_local` 与 Case A 的 0.048 ± 0.018 同量级。LoDADA reverse score 稳定地把 occupancy shift 报成 dynamics shift，corrected score 没有。
-- **第二关 Case D（dynamics + occupancy 同时 shift）通过**：`rho_local` = 0.965 ± 0.005 > `rho_rev` = 0.894 ± 0.005，5 个 seed 全部成立，差值 +0.06 到 +0.08，两组分布无重叠。
-- Case C（只有 dynamics shift）corrected 也略好于 reverse（0.966 vs 0.938），说明 reverse 的问题不只在 occupancy shift 时出现。
-- DARA global 在 Case B 的 `abs_dara` = 0.123，比 corrected 大 2 倍，但比 reverse 小 5 倍；它的 `rho_dara` 是对 $s'$-level 真值算的，与 cluster-level 的 `rho_local` 不是同一个真值，不能直接比大小。
-
-## 未覆盖
-
-- 仍只有 1 维 linear-gaussian、1 组 (A, B, K) 参数、K = 10 一个设置；没有扫 K、N_target、steps。
-- 没有 adversarial false negative（Experiment 1b）。
+- **Case B（第一关）通过，5/5**：`abs_rev` 0.605 vs `abs_local` 0.062，与 Case A 同量级。理想 reverse 在 B 上是 0.468，所以 LoDADA 的误报是 score 本身的性质，不是估计误差。
+- **Case D（第二关）通过，5/5**：`rho_local` 0.965 > `rho_rev` 0.894。
+- **Case E（1b）部分通过**：reverse 的漏报真实存在（0.168，理想 reverse 0.165），corrected 把误报从 0.254 压到 0.055、Spearman 从 0.34 提到 0.70，但自身漏报 0.202，没有低于 reverse；漏报集中在 target 支撑之外。DARA global 在 E 上 FN 0.040、Spearman 0.883，是三者里最好的。
