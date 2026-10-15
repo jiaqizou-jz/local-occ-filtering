@@ -9,9 +9,9 @@ from locomotion.truth import HopperSim
 # smoke-test data only: hopper rollouts under a noisy periodic controller, written in the odrl hdf5 layout
 # this is NOT the d4rl / odrl benchmark data; it exists so the pipeline can be exercised before those files are available
 
-def collect(path, *, gravity_scale, num_transitions, action_noise, seed, max_steps = 200):
+def collect(path, *, shift, level, num_transitions, action_noise, seed, max_steps = 200):
     rng = np.random.default_rng(seed)
-    sim = HopperSim(gravity_scale)
+    sim = HopperSim(shift, level)
     env = sim.env
     obs_, act_, term_, timeout_ = [], [], [], []
     while len(obs_) < num_transitions:
@@ -32,14 +32,15 @@ def collect(path, *, gravity_scale, num_transitions, action_noise, seed, max_ste
         f['rewards'] = np.zeros(len(obs_), dtype = np.float32)
         f['terminals'] = np.array(term_)
         f['timeouts'] = np.array(timeout_)
-    print(f'{path}: {len(obs_)} transitions, gravity x{gravity_scale}, action noise {action_noise}')
+    print(f'{path}: {len(obs_)} transitions, shift {shift} x{level}, action noise {action_noise}')
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required = True)
-    ap.add_argument('--gravity', type = float, default = 1.)
+    ap.add_argument('--shift', default = None, choices = [None, 'gravity', 'friction'])
+    ap.add_argument('--level', type = float, default = 1.)
     ap.add_argument('--num', type = int, default = 50_000)
     ap.add_argument('--noise', type = float, default = 0.5)
     ap.add_argument('--seed', type = int, default = 0)
     a = ap.parse_args()
-    collect(a.out, gravity_scale = a.gravity, num_transitions = a.num, action_noise = a.noise, seed = a.seed)
+    collect(a.out, shift = a.shift, level = a.level, num_transitions = a.num, action_noise = a.noise, seed = a.seed)
