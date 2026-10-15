@@ -25,6 +25,11 @@ toy/
   design_case_e.py             # Experiment 1b：在解析 ratio 上搜索 target behavior
   evaluate_ratio.py            # Experiment 1 + 1b，含逐样本 FN / FP 率
   test_ratio_identity.py       # Experiment 0
+locomotion/
+  data.py                      # D4RL / ODRL hdf5 → (s, a, s')，按 episode 划 held-out，source 统计量标准化
+  truth.py                     # gymnasium hopper（= gym/ODRL 模型的局部坐标版）+ 程序化 gravity / friction shift；D_true(s,a) = 两模拟器 s' 的归一化 L2 距离
+  evaluate_ratio.py            # Experiment 2 / 3：kmeans(target s') + 四个估计器，报 abs / Spearman / FN / FP
+  collect_surrogate.py         # 仅冒烟用的模拟器数据
 algo/offline_offline/local_occ_iql.py   # IQL + 一次性 source 过滤（Experiment 4）
 config/mujoco/local_occ_iql/   # 继承 iql 配置 + num_clusters / classifier_steps / keep_fraction
 ```
@@ -36,8 +41,8 @@ config/mujoco/local_occ_iql/   # 继承 iql 配置 + num_clusters / classifier_s
 | 0 | estimator 恒等式：joint − occ = conditional | `python -m pytest toy/test_ratio_identity.py` | Spearman > 0.9（DARA vs 真 $s'$ ratio；ours vs 真 cluster ratio；用 Spearman 是因为真 cluster ratio 有 −27 的截断尾部，logit 跟不上） |
 | 1 | toy 四格矩阵 | `python -m toy.evaluate_ratio` | **Case B**：`abs_rev` 明显 > 0 且 `abs_local` ≈ `abs_rev(A)`；**Case D**：`rho_local` > `rho_rev`，多 seed 稳定 |
 | 1b | adversarial false negative（Case E） | `python -m toy.design_case_e` 设计，`python -m toy.evaluate_ratio --cases E --seeds 5` 评估 | 原判据 $\ell_{\rm rev}\approx0$ 而 `abs_local` 仍非零 **在该家族不可构造**（见结果记录）；改为逐样本：`fn_rev_true` 明显 > 0，且 `fn_local` < `fn_rev`、`fp_local` < `fp_rev` |
-| 2 | ODRL 无 dynamics shift + behavior shift | `--env hopper-gravity --shift_level 1.0 --srctype medium-replay --tartype expert`（同 physics） | corrected score 分布比 reverse 更接近 0 |
-| 3 | ODRL dynamics + behavior shift | gravity 0.5 / 2.0 + 不同 dataset quality | Spearman(ours, $D_{\rm true}$) > Spearman(LoDADA, $D_{\rm true}$)，$D_{\rm true}$ 由 probe (s,a) 在两个 simulator 里 Monte Carlo |
+| 2 | ODRL 无 dynamics shift + behavior shift | `python -m locomotion.evaluate_ratio --source hopper_medium_replay-v2.hdf5 --target hopper_expert-v2.hdf5`（D4RL 两个数据集，同 physics） | corrected score 分布比 reverse 更接近 0 |
+| 3 | ODRL dynamics + behavior shift | **friction** 0.5 / 2.0（gravity 的一步 $D_{\rm true}$ 几乎是常数，见结果记录）+ 不同 dataset quality；`--shift friction --level 0.5` | Spearman(ours, $D_{\rm true}$) > Spearman(LoDADA, $D_{\rm true}$)，$D_{\rm true}$ 由 probe (s,a) 在两个 simulator 里单步得到（确定性模拟器，无需 Monte Carlo）；附接触 vs 飞行的检测 AUC |
 | 4 | downstream IQL | `python train.py --policy local_occ_iql --mode 3 --env hopper-gravity ...` | $J_t(\pi_{\rm ours})>J_t(\pi_{\rm LoDADA})$，同 budget / 同 seed |
 
 只有 0–3 为正才进入 4。
@@ -96,13 +101,22 @@ config/mujoco/local_occ_iql/   # 继承 iql 配置 + num_clusters / classifier_s
 - 首轮单 seed 结果（seed 0）被完整复现。
 - 未做：K / N_t / steps 扫描，多维状态。
 
+### ODRL 侧（2026-10-15）：管线已就绪，基准数据被网络策略挡住
+
+- 模拟器：容器是 python 3.13，mujoco-py 不可用；ODRL 的 xml 用 `coordinate="global"`，MuJoCo ≥ 2.3.4 不再支持。gymnasium 自带的 hopper.xml 是同一模型的局部坐标版（RK4，dt 0.002 × 4，obs = qpos[1:] + clip(qvel)），ODRL 的 gravity / friction 变体只改 option gravity / geom friction，已程序化复现并验证：确定性、从 obs 重建状态后单步结果与原 rollout 一致（误差 1e-16）、x 平移不变。
+- 数据：D4RL（rail.eecs.berkeley.edu）、ODRL target（drive.google.com）、Hugging Face 镜像在本环境均被拒绝；Google Drive 连接器能按 ID 读到 ODRL 文件夹的元数据但列不出子文件。**需要在环境设置里放行域名，或把 hdf5 放进仓库可达的位置。**
+- surrogate 冒烟（见 [results/surrogate/README.md](../results/surrogate/README.md)）给出三个约束：gravity 的一步 $D_{\rm true}$ 几乎常数，Experiment 3 改用 friction；K = 10 时 shift 只让 2–6% 样本换 cluster，cluster 级分辨率是 LoDADA 和 ours 共同的上限；friction 的接触/飞行与 occupancy 强相关，纯 occupancy score 的 Spearman 已有 0.4，真实数据上要同时报接触相内部的排序。
+
 ## 待做
 
 - [x] Experiment 0（pytest 通过）
 - [x] Experiment 1 多 seed（5 seeds，两关均通过）
 - [x] Experiment 1b adversarial Case E（字面判据不可构造；逐样本判据：修误报、修排序成立，修漏报不成立）
 - [ ] **待决定**：支撑外样本的处理（corrected score 在 target 支撑外无信息，默认 0 = 保留）；候选：用 $D_{SA}$ 的 occupancy ratio 做置信度门控，或低维时用 $s'$ 级残差（即 DARA 形式）代替 cluster 残差
-- [ ] ODRL 侧：`adaptation/` 接 ODRL dataset，写 Layer-1 probe-state Monte Carlo 真值
+- [x] ODRL 侧管线：`locomotion/` 数据加载、模拟器真值、评估脚本（surrogate 冒烟通过）
+- [ ] **阻塞**：拿到 D4RL hopper medium-replay / expert 与 ODRL hopper_friction_{0.5,2.0}_{medium,expert} hdf5（放行 rail.eecs.berkeley.edu、drive.google.com、docs.google.com、*.googleusercontent.com，或手动放入 `dataset/mujoco/`）
+- [ ] Experiment 2：D4RL medium-replay vs expert（同 physics），5 seeds
+- [ ] Experiment 3：friction 0.5 / 2.0，扫 K ∈ {5, 10, 20, 50}，报 Spearman、FN/FP、接触 vs 飞行 AUC、接触相内 Spearman
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
 - [ ] 环境：ODRL 要 python 3.8 / mujoco-py / d4rl，toy 阶段 python 3.13 + torch 2.x 即可（本次 torch 2.14 cpu）
 - [ ] 可选：Experiment 1 扫 K ∈ {5, 10, 20}、N_t ∈ {1k, 5k, 20k}，看 corrected 的优势是否随 target 样本量 / cluster 粗细变化

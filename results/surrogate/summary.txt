@@ -1,0 +1,47 @@
+surrogate hopper data (NOT the odrl benchmark): source = noisy periodic controller (noise 0.6, 60k), target = same controller family with noise 0.2 (12k)
+steps 5000, K = 10 kmeans on target s', 3 seeds, held-out = 20% of source episodes
+
+== same physics (exp 2 analog)  (3 seeds, n_src 45136 n_tar 11323 n_held 11305, min target cluster 44)
+  abs_rev 9.862±0.596  abs_dara 0.908±0.064  abs_local 0.607±0.043  abs_occ 3.628±0.175
+  mean_rev -9.373±0.620  mean_dara -0.324±0.146  mean_local -0.471±0.069  mean_occ -3.213±0.196
+
+== gravity x0.5  (3 seeds, n_src 45136 n_tar 11318 n_held 11305, min target cluster 575)
+  abs_rev 20.417±1.782  abs_dara 5.659±0.498  abs_local 1.362±0.008  abs_occ 8.746±0.538
+  mean_rev -20.190±1.795  mean_dara -5.367±0.463  mean_local -1.281±0.022  mean_occ -8.545±0.516
+  d_true_mean 0.113±0.001  cluster_flip 0.016±0.001
+  rho_rev -0.335±0.013  rho_local -0.356±0.060  rho_dara 0.289±0.034  rho_occ -0.244±0.028
+  fn_rev 0.704±0.006  fn_local 0.715±0.027  fn_dara 0.381±0.004
+  fp_rev 0.359±0.007  fp_local 0.376±0.020  fp_dara 0.226±0.015
+
+== gravity x2.0  (3 seeds, n_src 45136 n_tar 11329 n_held 11305, min target cluster 470)
+  abs_rev 21.171±0.897  abs_dara 6.299±0.187  abs_local 1.462±0.100  abs_occ 8.437±0.484
+  mean_rev -20.918±0.866  mean_dara -5.935±0.049  mean_local -1.358±0.144  mean_occ -8.253±0.456
+  d_true_mean 0.225±0.002  cluster_flip 0.053±0.007
+  rho_rev -0.287±0.018  rho_local -0.300±0.026  rho_dara 0.318±0.054  rho_occ -0.184±0.030
+  fn_rev 0.685±0.011  fn_local 0.701±0.026  fn_dara 0.330±0.018
+  fp_rev 0.339±0.004  fp_local 0.371±0.019  fp_dara 0.162±0.018
+
+== friction x0.5  (3 seeds, n_src 45136 n_tar 11328 n_held 11305, min target cluster 461)
+  abs_rev 12.956±0.858  abs_dara 1.670±0.103  abs_local 1.119±0.186  abs_occ 5.281±0.378
+  mean_rev -12.531±0.845  mean_dara -0.775±0.060  mean_local -1.007±0.190  mean_occ -5.004±0.359
+  d_true_mean 0.209±0.002  d_true_p10 0.000±0.000  d_true_p90 0.675±0.015  cluster_flip 0.045±0.001
+  rho_rev 0.479±0.010  rho_local 0.452±0.039  rho_dara 0.410±0.146  rho_occ 0.405±0.041
+  fn_rev 0.249±0.005  fn_local 0.269±0.029  fn_dara 0.236±0.066
+  fp_rev 0.062±0.004  fp_local 0.038±0.014  fp_dara 0.065±0.034
+  last seed, contact fraction 0.497
+  mean score flight / contact:  rev -6.11 / -17.68  local -0.41 / -2.06  dara +0.45 / -2.06  occ -3.01 / -6.36
+  AUC(-score separates contact from flight):  rev 0.804  local 0.826  dara 0.833  occ 0.732
+  spearman within contact probes:  rev -0.033  local -0.096  dara +0.290  occ -0.049
+
+== friction x2.0  (3 seeds, n_src 45136 n_tar 11312 n_held 11305, min target cluster 573)
+  abs_rev 21.941±1.193  abs_dara 2.680±0.062  abs_local 1.833±0.357  abs_occ 9.100±0.572
+  mean_rev -21.511±1.084  mean_dara -1.963±0.179  mean_local -1.757±0.384  mean_occ -8.790±0.488
+  d_true_mean 0.216±0.002  d_true_p10 0.000±0.000  d_true_p90 0.704±0.015  cluster_flip 0.061±0.002
+  rho_rev 0.499±0.003  rho_local 0.535±0.029  rho_dara 0.574±0.019  rho_occ 0.482±0.014
+  fn_rev 0.253±0.003  fn_local 0.219±0.022  fn_dara 0.101±0.010
+  fp_rev 0.071±0.005  fp_local 0.044±0.004  fp_dara 0.024±0.003
+  last seed, contact fraction 0.504
+  mean score flight / contact:  rev -8.91 / -32.09  local -0.68 / -3.70  dara -0.47 / -3.85  occ -3.67 / -12.99
+  AUC(-score separates contact from flight):  rev 0.852  local 0.904  dara 0.770  occ 0.838
+  spearman within contact probes:  rev -0.266  local -0.343  dara +0.673  occ -0.341
+
