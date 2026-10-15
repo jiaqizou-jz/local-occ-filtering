@@ -1,3 +1,18 @@
+# local-occ-filtering
+
+Fork of [ODRL](https://github.com/OffDynamicsRL/off-dynamics-rl) for one question: does LoDADA's reverse-conditional score
+$P(\text{target}\mid s,a,C(s'))$ confuse occupancy shift with dynamics shift, and does a localized occupancy correction
+$\operatorname{logit}D_{SAC}-\operatorname{logit}D_{SA}$ fix it?
+
+- `adaptation/` discrepancy estimators (LoDADA reverse, DARA global, ours local corrected), independent of RL
+- `toy/` linear-gaussian MDP with analytic ground truth, `python -m toy.evaluate_ratio`
+- `algo/offline_offline/local_occ_iql.py` IQL + corrected source filtering, `--policy local_occ_iql --mode 3`
+- plan, experiment ladder and go/no-go criteria: [docs/PLAN.md](docs/PLAN.md)
+
+Toy stage needs only `torch numpy scipy`; the ODRL stage keeps the upstream requirements below.
+
+---
+
 # ODRL: An Off-dynamics Reinforcement Learning Benchmark
 
 <p align="center">
