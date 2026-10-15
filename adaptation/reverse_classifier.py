@@ -32,13 +32,14 @@ def train_reverse_classifier(clf, src, tar, *, steps = 3000, batch_size = 256, l
 
     for _ in range(steps):
         loss = 0.
-        for si, ti in zip(src_idx, tar_idx):
+        for head, si, ti in zip(clf.heads, src_idx, tar_idx):
             if len(si) == 0 or len(ti) == 0:
                 continue
             si = si[torch.randint(0, len(si), (half,))]
             ti = ti[torch.randint(0, len(ti), (half,))]
-            inputs = tuple(cat((s[si], t[ti])).to(device) for s, t in zip(src, tar))
-            loss = loss + F.binary_cross_entropy_with_logits(clf(*inputs).squeeze(-1), labels)
+            # batch k only reaches head k through the gather in forward, so call head k directly (identical loss, 1/K the compute)
+            sa = cat((cat((src[0][si], tar[0][ti])), cat((src[1][si], tar[1][ti]))), dim = -1).to(device)
+            loss = loss + F.binary_cross_entropy_with_logits(head(sa).squeeze(-1), labels)
         opt.zero_grad()
         loss.backward()
         opt.step()

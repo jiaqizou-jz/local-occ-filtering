@@ -69,8 +69,8 @@ def evaluate_case(name, *, num_clusters = 10, steps = 3000, seed = 0):
         rho_dara = corr(l_dara, true_next),
     )
 
-def run(cases = 'ABCD', *, seeds = 1, out = None, **kwargs):
-    rows = [dict(seed = seed, **evaluate_case(name, seed = seed, **kwargs)) for seed in range(seeds) for name in cases]
+def run(cases = 'ABCD', *, seeds = 1, first_seed = 0, out = None, **kwargs):
+    rows = [dict(seed = seed, **evaluate_case(name, seed = seed, **kwargs)) for seed in range(first_seed, first_seed + seeds) for name in cases]
     keys = [k for k in rows[0] if k not in ('case', 'seed')]
     print('seed  case  ' + ''.join(f'{k:>11}' for k in keys))
     for r in rows:
@@ -94,8 +94,9 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--cases', default = 'ABCD')
     ap.add_argument('--seeds', type = int, default = 1)
+    ap.add_argument('--first_seed', type = int, default = 0)
     ap.add_argument('--num_clusters', type = int, default = 10)
     ap.add_argument('--steps', type = int, default = 3000)
     ap.add_argument('--out', default = None, help = 'csv path for per-seed rows')
     args = ap.parse_args()
-    run(args.cases, seeds = args.seeds, num_clusters = args.num_clusters, steps = args.steps, out = args.out)
+    run(args.cases, seeds = args.seeds, first_seed = args.first_seed, num_clusters = args.num_clusters, steps = args.steps, out = args.out)
