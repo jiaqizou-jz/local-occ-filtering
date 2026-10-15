@@ -32,7 +32,7 @@ config/mujoco/local_occ_iql/   # 继承 iql 配置 + num_clusters / classifier_s
 
 | # | 实验 | 命令 | 通过判据 |
 |---|---|---|---|
-| 0 | estimator 恒等式：joint − occ = conditional | `python -m pytest toy/test_ratio_identity.py` | Pearson > 0.9（DARA vs 真 $s'$ ratio；ours vs 真 cluster ratio） |
+| 0 | estimator 恒等式：joint − occ = conditional | `python -m pytest toy/test_ratio_identity.py` | Spearman > 0.9（DARA vs 真 $s'$ ratio；ours vs 真 cluster ratio；用 Spearman 是因为真 cluster ratio 有 −27 的截断尾部，logit 跟不上） |
 | 1 | toy 四格矩阵 | `python -m toy.evaluate_ratio` | **Case B**：`abs_rev` 明显 > 0 且 `abs_local` ≈ `abs_rev(A)`；**Case D**：`rho_local` > `rho_rev`，多 seed 稳定 |
 | 1b | adversarial false negative | 待写：选 $K_t$ 使 $\ell_{\rm occ}$ 与 $\ell_{\rm dyn}$ 反向 | $\ell_{\rm rev}\approx0$ 而 `abs_local` 仍非零 |
 | 2 | ODRL 无 dynamics shift + behavior shift | `--env hopper-gravity --shift_level 1.0 --srctype medium-replay --tartype expert`（同 physics） | corrected score 分布比 reverse 更接近 0 |
@@ -55,24 +55,34 @@ config/mujoco/local_occ_iql/   # 继承 iql 配置 + num_clusters / classifier_s
 - cluster 由 target $s'$ 拟合，source/target 用同一 centroid / edges 分配。
 - 第一阶段只看连续 score，不做 hard filtering。
 
-## 首轮结果（2026-10-15，seed 0，steps 3000，K = 10，held-out source 50k）
+## 结果记录
 
-```
-case      true_kl    abs_rev   abs_dara  abs_local    rho_rev  rho_local   rho_dara
-A           0.000      0.203      0.064      0.019        nan        nan        nan
-B           0.000      0.580      0.153      0.050        nan        nan        nan
-C           1.410      1.559      1.415      1.201      0.946      0.967      0.980
-D           1.410      1.838      1.353      1.122      0.898      0.958      0.986
-```
+### Experiment 0（2026-10-15，seed 0，Case D，steps 3000，K = 10）
 
-- 第一关（Case B）：reverse 0.58 vs corrected 0.05，corrected 与 Case A 的 0.02 同量级 → 成立
-- 第二关（Case D）：Spearman 0.958 (ours) > 0.898 (LoDADA) → 成立，但只有 1 个 seed
-- 单 seed，未做 1b adversarial，未扫 K / N_t；不能据此下结论
+`python -m pytest toy/test_ratio_identity.py` 通过。对应的 Spearman：DARA vs 真 $s'$ ratio 0.986，ours vs 真 cluster ratio 0.958（与下表 seed 0 Case D 的 `rho_dara` / `rho_local` 相同量）。
+
+### Experiment 1（2026-10-15，5 seeds，steps 3000，K = 10，held-out source 50k）
+
+完整表格与逐 seed 数据：[results/exp1_toy_matrix_seeds5.md](../results/exp1_toy_matrix_seeds5.md)、[results/exp1_toy_matrix_seeds5.csv](../results/exp1_toy_matrix_seeds5.csv)。
+
+| case | true_kl | abs_rev | abs_dara | abs_local | rho_rev | rho_local | rho_dara |
+|---|---|---|---|---|---|---|---|
+| A | 0.000 ± 0.000 | 0.189 ± 0.008 | 0.052 ± 0.015 | 0.048 ± 0.018 | nan | nan | nan |
+| B | 0.000 ± 0.000 | 0.605 ± 0.036 | 0.123 ± 0.033 | 0.062 ± 0.007 | nan | nan | nan |
+| C | 1.413 ± 0.018 | 1.556 ± 0.085 | 1.455 ± 0.056 | 1.231 ± 0.067 | 0.938 ± 0.008 | 0.966 ± 0.003 | 0.985 ± 0.004 |
+| D | 1.413 ± 0.018 | 1.765 ± 0.060 | 1.391 ± 0.049 | 1.147 ± 0.056 | 0.894 ± 0.005 | 0.965 ± 0.005 | 0.983 ± 0.006 |
+
+- 第一关（Case B）：`abs_rev` 0.605 ± 0.036 vs `abs_local` 0.062 ± 0.007，每个 seed 约 10 倍；`abs_local` 与 Case A 的 0.048 ± 0.018 同量级 → **通过，5/5 seed**
+- 第二关（Case D）：`rho_local` 0.965 ± 0.005 > `rho_rev` 0.894 ± 0.005，逐 seed 差值 +0.06 到 +0.08 → **通过，5/5 seed**
+- 首轮单 seed 结果（seed 0）被完整复现，已并入上表
+- 未做：1b adversarial，K / N_t / steps 扫描，多维状态
 
 ## 待做
 
-- [ ] Experiment 1 多 seed（`run(seeds = 5)`）
+- [x] Experiment 0（pytest 通过）
+- [x] Experiment 1 多 seed（5 seeds，两关均通过）
 - [ ] Experiment 1b adversarial case E
 - [ ] ODRL 侧：`adaptation/` 接 ODRL dataset，写 Layer-1 probe-state Monte Carlo 真值
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
-- [ ] 环境：ODRL 要 python 3.8 / mujoco-py / d4rl，toy 阶段本机 python 3.13 + torch 2.8 即可
+- [ ] 环境：ODRL 要 python 3.8 / mujoco-py / d4rl，toy 阶段 python 3.13 + torch 2.x 即可（本次 torch 2.14 cpu）
+- [ ] 可选：Experiment 1 扫 K ∈ {5, 10, 20}、N_t ∈ {1k, 5k, 20k}，看 corrected 的优势是否随 target 样本量 / cluster 粗细变化
