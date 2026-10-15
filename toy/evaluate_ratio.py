@@ -69,13 +69,33 @@ def evaluate_case(name, *, num_clusters = 10, steps = 3000, seed = 0):
         rho_dara = corr(l_dara, true_next),
     )
 
-def run(cases = 'ABCD', *, seeds = 1, **kwargs):
-    rows = [evaluate_case(name, seed = seed, **kwargs) for seed in range(seeds) for name in cases]
-    keys = [k for k in rows[0] if k != 'case']
-    print('case  ' + ''.join(f'{k:>11}' for k in keys))
+def run(cases = 'ABCD', *, seeds = 1, out = None, **kwargs):
+    rows = [dict(seed = seed, **evaluate_case(name, seed = seed, **kwargs)) for seed in range(seeds) for name in cases]
+    keys = [k for k in rows[0] if k not in ('case', 'seed')]
+    print('seed  case  ' + ''.join(f'{k:>11}' for k in keys))
     for r in rows:
-        print(f"{r['case']:<6}" + ''.join(f'{r[k]:>11.3f}' for k in keys))
+        print(f"{r['seed']:<6}{r['case']:<6}" + ''.join(f'{r[k]:>11.3f}' for k in keys))
+    if seeds > 1:
+        print('\nmean +- std over seeds')
+        print('case  ' + ''.join(f'{k:>17}' for k in keys))
+        for name in cases:
+            sub = [r for r in rows if r['case'] == name]
+            print(f'{name:<6}' + ''.join(f"{np.mean([r[k] for r in sub]):>9.3f} +- {np.std([r[k] for r in sub]):<5.3f}" for k in keys))
+    if out is not None:
+        import csv
+        with open(out, 'w', newline = '') as f:
+            w = csv.DictWriter(f, fieldnames = ['seed', 'case'] + keys)
+            w.writeheader()
+            w.writerows(rows)
     return rows
 
 if __name__ == '__main__':
-    run()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--cases', default = 'ABCD')
+    ap.add_argument('--seeds', type = int, default = 1)
+    ap.add_argument('--num_clusters', type = int, default = 10)
+    ap.add_argument('--steps', type = int, default = 3000)
+    ap.add_argument('--out', default = None, help = 'csv path for per-seed rows')
+    args = ap.parse_args()
+    run(args.cases, seeds = args.seeds, num_clusters = args.num_clusters, steps = args.steps, out = args.out)
