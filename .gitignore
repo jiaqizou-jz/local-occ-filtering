@@ -8,3 +8,4 @@ runs/
 .DS_Store
 results/exp1_seed*.log
 results/exp1_seed*.csv
+dataset/surrogate/
