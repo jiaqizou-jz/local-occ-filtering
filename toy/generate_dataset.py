@@ -11,7 +11,11 @@ CASES = dict(
     A = SOURCE,                                   # same dynamics, same behavior
     B = SOURCE._replace(K = 0.),                  # same dynamics, different behavior   <- lodada false positive
     C = SOURCE._replace(A = 0.6, B = 0.8),        # different dynamics, same behavior
-    D = SOURCE._replace(A = 0.6, B = 0.8, K = 0.) # different dynamics, different behavior
+    D = SOURCE._replace(A = 0.6, B = 0.8, K = 0.), # different dynamics, different behavior
+    # adversarial (experiment 1b): same dynamics shift as C, target behavior three times less noisy (expert-like target data)
+    # chosen by grid search on the analytic ratios (toy/design_case_e.py): the ideal reverse score misses ~17% of the
+    # most-shifted source transitions and flags ~26% of unshifted ones, spearman with the true dynamics ratio ~0.35
+    E = SOURCE._replace(A = 0.6, B = 0.8, sigma_a = 0.1),
 )
 
 def make_case(name, *, num_source = 50_000, num_target = 5_000, horizon = 50, seed = 0):
