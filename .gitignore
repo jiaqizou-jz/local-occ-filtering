@@ -6,3 +6,4 @@ runs/
 *.pth
 .pytest_cache/
 .DS_Store
+dataset/**/*.hdf5

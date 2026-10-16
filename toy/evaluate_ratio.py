@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from scipy.stats import spearmanr, pearsonr
 
-from toy.generate_dataset import make_case
-from toy.linear_gaussian import true_dynamics_kl, true_next_state_log_ratio, true_cluster_log_ratio
+from toy.generate_dataset import make_case, HORIZON
+from toy.linear_gaussian import true_dynamics_kl, true_next_state_log_ratio, true_cluster_log_ratio, true_reverse_log_ratio
 from adaptation.clustering import quantile_edges, assign_bins
 from adaptation.networks import train_domain_classifier
 from adaptation.occupancy_classifier import OccupancyClassifier
@@ -38,10 +38,7 @@ def fit_estimators(src, tar, *, num_clusters, steps, seed):
     rev = train_reverse_classifier(ReverseClassifier(ds, da, num_clusters), (s, a, c), (ts, ta, tc), steps = steps)
     return occ, sas, joint, rev
 
-def evaluate_case(name, *, num_clusters = 10, steps = 3000, seed = 0):
-    src, tar, src_domain, tar_domain = make_case(name, seed = seed)
-    held, *_ = make_case(name, seed = seed + 100)
-
+def evaluate(name, src, tar, held, src_domain, tar_domain, *, num_clusters = 10, steps = 3000, seed = 0, horizon = HORIZON, s0_std = 1., s0_mean = (0., 0.)):
     edges = quantile_edges(tar.next_state, num_clusters)
     src_t = to_tensor(src, assign_bins(src.next_state, edges))
     tar_t = to_tensor(tar, assign_bins(tar.next_state, edges))
@@ -57,10 +54,12 @@ def evaluate_case(name, *, num_clusters = 10, steps = 3000, seed = 0):
     kl = true_dynamics_kl(src_domain, tar_domain, held.state, held.action)
     true_next = true_next_state_log_ratio(src_domain, tar_domain, held.state, held.action, held.next_state)
     true_cluster = true_cluster_log_ratio(src_domain, tar_domain, held.state, held.action, held_c, edges)
+    true_rev = true_reverse_log_ratio(src_domain, tar_domain, held.state, held.action, held.next_state, horizon = horizon, s0_std = s0_std, s0_mean = s0_mean)
 
     return dict(
         case = name,
         true_kl = kl.mean(),
+        true_rev = np.abs(true_rev).mean(),
         abs_rev = np.abs(l_rev).mean(),
         abs_dara = np.abs(l_dara).mean(),
         abs_local = np.abs(l_local).mean(),
@@ -69,12 +68,20 @@ def evaluate_case(name, *, num_clusters = 10, steps = 3000, seed = 0):
         rho_dara = corr(l_dara, true_next),
     )
 
-def run(cases = 'ABCD', *, seeds = 1, **kwargs):
-    rows = [evaluate_case(name, seed = seed, **kwargs) for seed in range(seeds) for name in cases]
+def evaluate_case(name, *, num_clusters = 10, steps = 3000, seed = 0):
+    src, tar, src_domain, tar_domain = make_case(name, seed = seed)
+    held, *_ = make_case(name, seed = seed + 100)
+    return evaluate(name, src, tar, held, src_domain, tar_domain, num_clusters = num_clusters, steps = steps, seed = seed)
+
+def print_rows(rows):
     keys = [k for k in rows[0] if k != 'case']
     print('case  ' + ''.join(f'{k:>11}' for k in keys))
     for r in rows:
         print(f"{r['case']:<6}" + ''.join(f'{r[k]:>11.3f}' for k in keys))
+
+def run(cases = 'ABCD', *, seeds = 1, **kwargs):
+    rows = [evaluate_case(name, seed = seed, **kwargs) for seed in range(seeds) for name in cases]
+    print_rows(rows)
     return rows
 
 if __name__ == '__main__':
