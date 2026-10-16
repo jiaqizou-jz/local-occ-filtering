@@ -12,7 +12,8 @@ from adaptation.occupancy_classifier import OccupancyClassifier
 from adaptation.sas_classifier import DynamicsClassifier
 from adaptation.joint_cluster_classifier import JointClusterClassifier
 from adaptation.reverse_classifier import ReverseClassifier, train_reverse_classifier
-from adaptation.score import reverse_log_ratio, dara_log_ratio, local_log_ratio
+from adaptation.normalized_cluster_classifier import ClusterPredictor, train_cluster_predictor, NormalizedClusterClassifier, ClusterConditionedClassifier
+from adaptation.score import reverse_log_ratio, dara_log_ratio, local_log_ratio, normalized_log_ratio, separate_log_ratio
 
 # experiment 1: four-cell toy matrix
 # does the reverse conditional (lodada) report dynamics shift when only occupancy shifted (case B)?
@@ -36,7 +37,10 @@ def fit_estimators(src, tar, *, num_clusters, steps, seed):
     sas = train_domain_classifier(DynamicsClassifier(ds, da), (s, a, ns), (ts, ta, tns), steps = steps)
     joint = train_domain_classifier(JointClusterClassifier(ds, da, num_clusters), (s, a, c), (ts, ta, tc), steps = steps)
     rev = train_reverse_classifier(ReverseClassifier(ds, da, num_clusters), (s, a, c), (ts, ta, tc), steps = steps)
-    return occ, sas, joint, rev
+    pred = train_cluster_predictor(ClusterPredictor(ds, da, num_clusters), (s, a, c), steps = steps)
+    norm = train_domain_classifier(NormalizedClusterClassifier(ds, da, num_clusters, pred), (s, a, c), (ts, ta, tc), steps = steps)
+    zk = train_domain_classifier(ClusterConditionedClassifier(ds, da, num_clusters), (s, a, c), (ts, ta, tc), steps = steps)
+    return occ, sas, joint, rev, norm, zk
 
 def evaluate(name, src, tar, held, src_domain, tar_domain, *, num_clusters = 10, steps = 3000, seed = 0, horizon = HORIZON, s0_std = 1., s0_mean = (0., 0.)):
     edges = quantile_edges(tar.next_state, num_clusters)
@@ -45,11 +49,13 @@ def evaluate(name, src, tar, held, src_domain, tar_domain, *, num_clusters = 10,
     held_c = assign_bins(held.next_state, edges)
     s, a, ns, c = to_tensor(held, held_c)
 
-    occ, sas, joint, rev = fit_estimators(src_t, tar_t, num_clusters = num_clusters, steps = steps, seed = seed)
+    occ, sas, joint, rev, norm, zk = fit_estimators(src_t, tar_t, num_clusters = num_clusters, steps = steps, seed = seed)
 
     l_rev = reverse_log_ratio(rev, s, a, c).numpy()
     l_dara = dara_log_ratio(sas, occ, s, a, ns).numpy()
     l_local = local_log_ratio(joint, s, a, c).numpy()
+    l_norm = normalized_log_ratio(norm, s, a, c).numpy()
+    l_sep = separate_log_ratio(zk, occ, s, a, c).numpy()
 
     kl = true_dynamics_kl(src_domain, tar_domain, held.state, held.action)
     true_next = true_next_state_log_ratio(src_domain, tar_domain, held.state, held.action, held.next_state)
@@ -63,8 +69,12 @@ def evaluate(name, src, tar, held, src_domain, tar_domain, *, num_clusters = 10,
         abs_rev = np.abs(l_rev).mean(),
         abs_dara = np.abs(l_dara).mean(),
         abs_local = np.abs(l_local).mean(),
+        abs_norm = np.abs(l_norm).mean(),
+        abs_sep = np.abs(l_sep).mean(),
         rho_rev = corr(l_rev, true_cluster),
         rho_local = corr(l_local, true_cluster),
+        rho_norm = corr(l_norm, true_cluster),
+        rho_sep = corr(l_sep, true_cluster),
         rho_dara = corr(l_dara, true_next),
     )
 
@@ -75,9 +85,9 @@ def evaluate_case(name, *, num_clusters = 10, steps = 3000, seed = 0):
 
 def print_rows(rows):
     keys = [k for k in rows[0] if k != 'case']
-    print('case  ' + ''.join(f'{k:>11}' for k in keys))
+    print('case  ' + ''.join(f'{k:>10}' for k in keys))
     for r in rows:
-        print(f"{r['case']:<6}" + ''.join(f'{r[k]:>11.3f}' for k in keys))
+        print(f"{r['case']:<6}" + ''.join(f'{r[k]:>10.3f}' for k in keys))
 
 def run(cases = 'ABCD', *, seeds = 1, **kwargs):
     rows = [evaluate_case(name, seed = seed, **kwargs) for seed in range(seeds) for name in cases]

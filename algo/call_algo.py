@@ -69,7 +69,7 @@ def call_algo(algo_name, config, mode, device):
 
     elif mode == 3:
         algo_name = algo_name.lower()
-        assert algo_name in ['dara', 'bosa', 'iql', 'td3_bc', 'igdf', 'local_occ_iql']
+        assert algo_name in ['dara', 'bosa', 'iql', 'td3_bc', 'igdf', 'local_occ_iql', 'score_iql']
         # offline offline setting
         from offline_offline.dara import DARA
         from offline_offline.bosa import BOSA
@@ -77,6 +77,7 @@ def call_algo(algo_name, config, mode, device):
         from offline_offline.td3_bc import TD3BC
         from offline_offline.igdf import IGDF
         from offline_offline.local_occ_iql import LocalOccIQL
+        from offline_offline.score_iql import ScoreIQL
 
         algo_to_call = {
             'dara': DARA,
@@ -85,6 +86,7 @@ def call_algo(algo_name, config, mode, device):
             'td3_bc': TD3BC,
             'igdf': IGDF,
             'local_occ_iql': LocalOccIQL,
+            'score_iql': ScoreIQL,
         }
 
         algo = algo_to_call[algo_name]

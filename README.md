@@ -8,6 +8,7 @@ $\operatorname{logit}D_{SAC}-\operatorname{logit}D_{SA}$ fix it?
 - `toy/` linear-gaussian MDP with analytic ground truth, `python -m toy.evaluate_ratio`; adversarial false negative `python -m toy.adversarial`
 - `odrl/` the same three estimators on d4rl / ODRL hopper data with simulator next-state gap as truth, `python -m odrl.evaluate_ratio`
 - `odrl/resolution.py` cluster flip rate of paired open-loop simulator rollouts (how much dynamics shift any cluster-level score can see), `python -m odrl.resolution`; `odrl/detectability.py` held-out conditional log-loss gain with shuffled-label controls and overlap-restricted scores, `python -m odrl.detectability`
+- `odrl/oracle.py` + `algo/offline_offline/score_iql.py` oracle-filtered IQL pilot (Gate O): paired perfect-support target sets, state-gap / Bellman-gap / DARA / random source scores, `odrl/run_gate_o.sbatch`; `odrl/gate_o_*.py` summary and divergence diagnostics
 - `algo/offline_offline/local_occ_iql.py` IQL + corrected source filtering, `--policy local_occ_iql --mode 3`
 - plan, experiment ladder and go/no-go criteria: [docs/PLAN.md](docs/PLAN.md)
 

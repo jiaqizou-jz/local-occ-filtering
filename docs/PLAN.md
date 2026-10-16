@@ -28,9 +28,20 @@ toy/
 odrl/
   datasets.py                  # 源 = d4rl hopper，目标 = ODRL hdf5 (dataset/mujoco/download.sh) 或 d4rl 同物理集
   ground_truth.py              # probe-state 真值：观测重建 qpos/qvel，两个 simulator 各走一步，gap = |f_t - f_s| / std
-  evaluate_ratio.py            # Experiment 2 + 3：null / behavior / g{0.5,2.0}_{expert,medium,random}
-algo/offline_offline/local_occ_iql.py   # IQL + 一次性 source 过滤（Experiment 4）
+  evaluate_ratio.py            # Experiment 2 + 3：null / behavior / g{0.5,2.0}_{expert,medium,random} / paired_<g>（perfect support）
+  resolution.py                # Gate R：配对开环 rollout 的 cluster flip rate、gap cv
+  detectability.py             # Gate P / S：5 折 cross-fit 条件对数损失增益 + 打乱标签对照 + on-support 行；cluster_on = next | delta
+  oracle.py                    # Gate O：配对目标集（paired / pairedheld / pairedbig）、oracle 分数（state gap / Bellman gap / DARA / random）、held-out Bellman 残差
+  gate_o_summary.py            # Gate O 汇总：每 run 最后 5 次 target eval 均值（--resid 加 Bellman 残差）
+  gate_o_mask_diag.py          # Gate O 诊断：各 mask 的 terminal 比例 / gap / 闭包最近邻距离
+  gate_o_rollout_diag.py       # Gate O 诊断：保存的 actor 在 source / target 环境重放（回合长度、速度、最低高度）
+  gate_o_qv_diag.py            # Gate O 诊断：held-out 目标集上 Q / V 量级（发散检查）
+  run_*.sbatch                 # 每个 gate 一个 sbatch（defq GPU / CPU）
+adaptation/normalized_cluster_classifier.py   # Step 1 归一化估计器（g 对 log P̂_s(k|z) 做 logsumexp 归一）+ 两分类器差 sep
+algo/offline_offline/local_occ_iql.py   # IQL + 一次性 source 过滤（Experiment 4，未用）
+algo/offline_offline/score_iql.py       # Gate O：IQL + 按预计算分数的 source 选择（concat | target_only | <score key>）+ transition 级目标集覆盖
 config/mujoco/local_occ_iql/   # 继承 iql 配置 + num_clusters / classifier_steps / keep_fraction
+config/mujoco/score_iql/       # 继承 iql 配置 + source / keep_fraction / score_file / target_file
 ```
 
 ## 实验阶梯与 go/no-go
@@ -267,13 +278,395 @@ E (s5)      1.410      0.000      3.475      1.710      0.659     -0.953      0.
 - Exp 4（下游 IQL）继续关闭
 - 下一步候选（按信息量）：(1) halfcheetah：无提前终止，random 目标也是整段 1000 步，h = 20 窗口充足，是唯一可能同时满足 overlap 与 resolution 的 ODRL 环境，先跑 Gate R + Gate 2（h ∈ {1, 5, 20}）；(2) N_t 扫描看 full 通道的增益是否随 N_t 增长（区分 power 与 representation）；(3) 残差归一化修 on-support 假阳性，用 behavior 行 τ = 0.1 的 abs_local 作判据；(4) friction（增益型）轴
 
+## 第二轮评注后的计划（2026-10-16）：先修估计器，再换环境
+
+评注给的顺序：(1) 归一化条件估计器修 on-support 泄漏 → (2) halfcheetah Gate R / S / P → (3) N_t 扫描 → (4) 固定 probe 分布 → (5) friction → (6) oracle IQL → (7) learned IQL。采纳，补两点：Gate R 不涉及估计器，和 (1) 并行跑；评注把我的 Gate 2 改名 Gate P，以下沿用 S / R / P / C / O。
+
+### 预注册：Step 1 归一化估计器（启动前写下）
+
+`adaptation/normalized_cluster_classifier.py`：$P_t(k\mid z)=P_s(k\mid z)e^{g(z,k)}/\sum_j P_s(j\mid z)e^{g(z,j)}$，$\ell=g(z,k)-\log\sum_j\hat P_s(j\mid z)e^{g(z,j)}$，$\hat P_s(k\mid z)$ 是只在源数据上训练并冻结的 K 路分类器；occ 分支仍 detach。同时加对照 `sep` = 两个独立分类器之差 logit $D_{ZK}$ − logit $D_Z$（用户笔记里的原始写法，无结构约束）。三者共用 `fit_estimators`、同数据同步数。
+
+- ODRL（`odrl/run_gate_s.sbatch`，null / behavior / g2.0_random，3 seed，只跑 supp 行）：判据 behavior 行 τ = 0.1 的 abs_norm ≤ 2 × abs_norm(null | τ = 0.1)，3/3。g2.0_random 的 rho_norm(τ = 0) 与 rho_local 差 ≤ 0.1（排序不被归一化破坏）
+- toy（`toy/run_toy_seeds.sbatch` seed 0–2，`toy/run_adversarial.sbatch` seed 0–2）：Case B abs_norm ≤ 2 × abs_norm(A)；Case D、F、E 的 rho_norm > 0.9 且 ≥ rho_local − 0.02
+- 预测：abs_norm(behavior | Ω_0.1) 从 0.94 降到 0.5 以下但到不了 null 的 0.15——泄漏并没有被完全封死，$\ell(z,k_s)$ 的上界是 $-\log\hat P_s(k_s\mid z)$，向负方向仍无界，只是不再有"欠拟合 occupancy 直接写进残差"的通道；abs_sep 与 abs_local 同量级；toy 上 norm 与 local 的 rho 差 < 0.01
+- 门：ODRL 判据不过 → 不进 halfcheetah 的 Gate S / P，先找泄漏来源
+
+### 预注册：Step 2.1 halfcheetah Gate R（`odrl/run_resolution_halfcheetah.sbatch`）
+
+源 d4rl halfcheetah-medium-replay-v2（dt = 0.05，是 hopper 的 6 倍），目标 ODRL halfcheetah-gravity 0.5 / 2.0 的 medium（target-fit 分区）；h ∈ {1, 5, 10, 20}，K ∈ {10, 30, 100, 300, 1000}，feature {last, delta, window}。无提前终止，random 目标 5000 条里 20 步窗口应 ≥ 4900。
+- 预测：h = 1、K = 10、target-fit 的 flip 在 1–5%（单步效应比 hopper 大 6 倍但仍小于簇尺度）；h = 20 的 flip > 30%；delta ≥ last
+- 判据：同 Gate R，flip ≥ 10% 的配置才进 Gate P
+
+### Step 1 结果（2026-10-16，job 202658 toy / 202659 1b / 202660 ODRL，3 seed）
+
+```
+toy ABCD           abs_rev   abs_dara  abs_local   abs_norm    abs_sep    rho_rev  rho_local   rho_norm    rho_sep   rho_dara
+A                    0.189      0.052      0.038      0.072      0.064
+B                    0.598      0.106      0.060      0.095      0.232
+C                    1.615      1.468      1.271      1.449      1.261      0.942      0.968      0.988      0.965      0.986
+D                    1.784      1.380      1.179      1.420      1.195      0.898      0.963      0.984      0.951      0.987
+toy ACFE
+A                    0.169      0.046      0.038      0.075      0.056
+C                    1.408      1.293      1.152      1.235      1.163      0.931      0.970      0.985      0.965      0.988
+F                    1.417      1.837      1.580      1.580      1.520      0.854      0.986      0.990      0.989      0.997
+E                    3.536      1.628      0.739      0.126      0.711     -0.951      0.991      0.974      0.928      0.950
+ODRL (supp)   tau   frac   abs_rev  abs_dara abs_local  abs_norm   abs_sep   abs_occ   rho_rev rho_local  rho_norm   rho_sep  rho_dara   rho_occ
+null          0.1  0.999     1.768     0.203     0.150     0.132     0.222     0.226
+behavior      0.0  1.000    38.424     2.407     3.011     2.067     3.800     9.375
+behavior      0.1  0.069     7.732     1.317     0.938     0.890     1.464     1.155
+g2.0_random   0.0  1.000    30.546     7.269     4.285     5.550     3.953    17.243     0.460     0.319     0.134    -0.061     0.389     0.489
+g2.0_random   0.1  0.106     5.080     1.573     0.981     1.405     1.269     1.059    -0.209    -0.154    -0.080    -0.063    -0.216    -0.120
+```
+
+- **toy 判据全部通过**：B abs_norm 0.095 ≤ 2 × A 0.072；C / D / F / E 的 rho_norm 0.988 / 0.984 / 0.990 / 0.974，都 > 0.9 且 ≥ rho_local − 0.02。两个预期之外的好处：(i) E 的幅度 abs_norm = 0.126，与精确 cluster 级 |l_dyn_C| = 0.11 对上了（local 高估到 0.74），1b 原来过不了的幅度判据在 norm 上是过的；(ii) C / D 上 rho_norm 追平 DARA（0.988 vs 0.986、0.984 vs 0.987），local 是 0.968 / 0.963。`sep`（两个独立分类器之差）B 行假阳性 0.232，是 local 的 4 倍：结构确实重要
+- **ODRL 判据不过（0/3）**：behavior 行 τ = 0.1 的 abs_norm 0.89 ± 0.17（1.05 / 0.65 / 0.97）vs null 0.13，与 local 的 0.94 没有区别；sep 1.46 更差。预测（降到 0.5 以下）错了，评注的归因（detach 的 occ 分支欠拟合被残差吸收）在真实数据上不成立——归一化把这条通道封了，带内残余不动
+- g2.0_random τ = 0 的 rho_norm 0.13 vs rho_local 0.32，预注册的 ±0.1 判据形式上不过，但这条判据写错了对象：那一行 τ = 0 的 rho 是 occupancy–接触模式混杂（rho_occ 0.49），去掉 occupancy 成分的估计器理应更低；带内（τ = 0.1）所有列都 ≈ 0，无差别
+- 残余的两个候选来源：(a) 归一化只封正向，$\ell(z,k_s)\le-\log\hat P_s(k_s\mid z)$，负向无界，欠拟合 occupancy 仍可写成"源侧 z 的负 ℓ"；(b) 带内数据稀薄（源只有 7% 在带内）的估计方差，与泄漏无关。区分实验（job 202708）：同数据、同 cluster、两次独立训练，报带内 signed mean 与两次拟合之间的 Spearman——系统泄漏跨拟合可复现、方差不可复现
+- 门：按预注册，halfcheetah 的 Gate S / P 暂不进，等诊断
+
+### halfcheetah Gate R 结果（2026-10-16，job 202661，源 halfcheetah-medium-replay-v2，held-out 20k 个 20 步窗口）
+
+```
+gravity  h   feature  partition         gap     recon  flip@K=10     flip@K=30     flip@K=100    flip@K=300    flip@K=1000
+0.5      1   last     pooled         0.314     0.000       0.0249       0.0309       0.0553       0.0661       0.0611
+0.5      1   last     target         0.314     0.000       0.0175       0.0182       0.0262       0.0721       0.0864
+0.5      1   delta    pooled         0.345     0.000       0.0277       0.0359       0.0447       0.0477       0.0368
+0.5      5   last     pooled         1.703     0.000       0.1646       0.3117       0.4718       0.5637       0.6232
+0.5      5   delta    pooled         1.562     0.000       0.1847       0.2709       0.3748       0.4395       0.4698
+0.5      5   window   pooled         2.679     0.000       0.0246       0.1218       0.2079       0.2816       0.3314
+0.5      10  last     pooled         2.628     0.000       0.2135       0.4045       0.5994       0.6962       0.7466
+0.5      10  delta    pooled         2.599     0.000       0.2334       0.4368       0.5788       0.6423       0.6756
+0.5      10  window   pooled         6.240     0.000       0.0398       0.2507       0.4029       0.5049       0.5716
+0.5      20  last     pooled         3.208     0.000       0.2077       0.4778       0.6481       0.7309       0.7764
+0.5      20  delta    pooled         3.821     0.000       0.2946       0.5480       0.6338       0.6919       0.7229
+0.5      20  window   pooled        11.866     0.000       0.0595       0.2781       0.5205       0.6294       0.6564
+2.0      1   last     pooled         0.621     0.000       0.0505       0.0628       0.1162       0.1524       0.1731
+2.0      1   last     target         0.621     0.000       0.1560       0.1852       0.2459       0.2797       0.3240
+2.0      1   delta    pooled         0.679     0.000       0.0530       0.0756       0.1000       0.1185       0.1232
+2.0      5   last     pooled         2.453     0.000       0.1681       0.4384       0.6268       0.7006       0.7528
+2.0      5   delta    pooled         2.278     0.000       0.2440       0.4415       0.5722       0.6547       0.6906
+2.0      5   window   pooled         4.241     0.000       0.0765       0.2130       0.3491       0.5260       0.5911
+2.0      10  last     pooled         2.766     0.000       0.3765       0.5691       0.6794       0.7482       0.7873
+2.0      10  delta    pooled         2.760     0.000       0.3936       0.5667       0.6744       0.7192       0.7509
+2.0      10  window   pooled         7.639     0.000       0.0698       0.3075       0.6169       0.6788       0.7167
+2.0      20  last     pooled         2.867     0.000       0.4037       0.6180       0.7450       0.7984       0.8269
+2.0      20  delta    pooled         3.072     0.000       0.4567       0.6040       0.7022       0.7511       0.7683
+2.0      20  window   pooled        12.072     0.000       0.0751       0.5566       0.7229       0.7559       0.7698
+```
+
+- **g2.0 在 h = 1、K = 10、target-fit 就过 Gate R：flip 15.6%**（hopper 是 0.6%）；g0.5 的 h = 1 只有 1.8%（K = 1000 也只 8.6%），要 h = 5 才到 16%（K = 10）。单步 gap 0.31 / 0.62，是 hopper 的 10 倍（dt 0.05 vs 0.008）
+- 预测核对：g0.5 的 1–5% ✓；g2.0 预测偏低（实际 15.6%）；h = 20 > 30% ✓；delta ≥ last 在 pooled 上 ✓（差别小）；recon = 0 ✓
+- 可进 Gate P 的配置：g2.0 h = 1（任意 K）、两种重力 h ≥ 5。halfcheetah-gravity 是第一个 overlap（待测）与 resolution 有可能同时满足的 ODRL 环境
+
+### 带内残余的诊断（2026-10-16，job 202708，null / behavior，3 seed，同数据同 cluster 两次独立训练）
+
+```
+behavior tau=0.1   seed   abs     mean     rep        null tau=0.1   abs    mean    rep
+local               0    1.034   -0.048   0.837                     0.146  -0.059  0.513
+                    1    0.880   -0.642   0.774                     0.159  -0.057  0.676
+                    2    0.900   -0.533   0.675                     0.145  -0.040  0.620
+norm                0    1.045   -1.003   0.235                     0.129  -0.060  0.582
+                    1    0.650   -0.596  -0.101                     0.132  -0.067  0.668
+                    2    0.974   -0.912   0.570                     0.135  -0.073  0.651
+sep                 0    1.498   -0.850   0.535                     0.250   0.030  0.496
+                    1    1.523   -0.430   0.553                     0.216  -0.001  0.430
+                    2    1.372   -0.065   0.328                     0.200   0.029  0.081
+dara                0    1.595   -1.213   0.386                     0.229   0.033  0.462
+                    1    1.119   -0.323   0.331                     0.201   0.042  0.007
+                    2    1.238   -0.743   0.495                     0.178  -0.018  0.186
+rev                 0    8.510   -8.055   0.930                     1.808  -1.545  0.825
+                    1    7.017   -6.483   0.928                     1.781  -1.469  0.795
+                    2    7.668   -7.033   0.922                     1.715  -1.434  0.821
+occ                 0    1.141   -0.795   0.685
+```
+
+- `rep` = 两次独立拟合在同一批带内 held-out 点上的 Spearman。**local 的带内残余是可复现的逐点结构**（rep 0.68–0.84），signed mean 在 2/3 seed 里明显为负：这是数据驱动的系统泄漏。**norm 的残余逐点不可复现**（rep 0.24 / −0.10 / 0.57），但 |mean| ≈ abs（−1.00 / 1.05、−0.60 / 0.65、−0.91 / 0.97）：几乎是一个常数负偏移加噪声。对分位数或 exp 权重过滤来说常数偏移不改变排序；预注册的 abs 判据把它算成失败
+- 偏移的方向是预注册里写的负向通道：$\ell(z,k_s)=-\log\big(\hat p_s+\sum_{j\ne s}\hat P_s(j\mid z)e^{g_j-g_s}\big)$，正向有界、负向无界，剩余的 occupancy 以"目标把质量放到别的簇"的形式进来，带内近似常数（τ = 0 全体的 mean 是 −1.8 到 −2.3，随 occupancy 区域变，不随点变）
+- LoDADA 带内 −7 到 −8、rep 0.93：假阳性巨大、系统、完全可复现。DARA 带内 1.1–1.6，rep 0.33–0.50，也有一半是偏移
+- **事后读法**：带内去均值后的 |ℓ_norm| 约 0.1–0.3，与 null 的 0.13 同量级。这是事后判据，需要全新 seed 确认
+
+### 预注册：Step 1 确认 + halfcheetah Gate S / P（启动前写下）
+
+- **确认（`odrl/run_gate_s_confirm.sbatch`，seed 3–5，null / behavior）**：新列 `cabs` = 带内去均值 |ℓ|。判据：τ = 0.1 的 cabs_norm(behavior) ≤ 2 × cabs_norm(null)，3/3；预测 cabs_local(behavior) 不过（逐点泄漏），rep_local > 0.6、rep_norm < 0.6 复现
+- **halfcheetah Gate S / P（`odrl/run_detectability_halfcheetah.sbatch`，h = 1，K = 10，3 seed）**：源 halfcheetah-medium-replay-v2；行 null、behavior（expert）、behavior_m（d4rl medium-v2，第二个同物理对照，overlap 应比 expert 多）、g0.5 / g2.0 × medium / random。判据同 Gate P（d = g − g_shuf 同 seed 大于 null 与两个 behavior 行，3/3）和 Gate S（τ = 0.1 带内 cabs ≤ 2 × null）
+- 预测：g2.0 两行 coarse 与 full 都过（Gate R 15.6%，gap 0.62）；g0.5 两行 coarse 不过（1.8%）、full 过；random 行 ce_occ 高于 medium 行；带内 rho_norm 在 g2.0 行 > 0.3 且 > rho_occ（第一次有机会看到"估计器在带内排出 gap"）
+- 若 g2.0 行 Gate P 过而带内 rho 不过 occupancy 对照，结论是"可检测但估计器未校准"（Gate C 不过），下一步是 N_t 扫描而不是下游
+
+### Step 1 确认结果（2026-10-16，job 202716，seed 3–5）
+
+```
+tau=0.1        frac   cabs_local  cabs_norm  cabs_sep  cabs_dara  cabs_rev   abs_norm  mean_norm  rep_local  rep_norm
+null          1.000      0.131      0.167     0.207      0.202     1.897      0.123     -0.068      0.588     0.651
+behavior      0.089      0.969      1.334     1.870      1.199     6.372      0.934     -0.869      0.684     0.487
+```
+
+- **去均值判据也不过（0/3）**：cabs_norm(behavior) 1.33 vs 2 × null 0.33。上一节"去均值后约 0.1–0.3"的事后读法是错的——abs ≈ |mean| 只说明几乎全负，不说明集中；实际是重尾的负分布。预注册的确认跑否定了事后读法，这正是它的用处
+- 复现的部分：rep_local 0.68 > 0.6、rep_norm 0.49 < 0.6（预测方向对，差距比 seed 0–2 小）
+- **Step 1 结论**：归一化估计器在 toy 上全面更好（校准 + 追平 DARA），但在 hopper 同物理行的 overlap 带内没有去掉假阳性，detach 泄漏不是主因。剩下的解释是带内数据稀薄的有限样本方差——halfcheetah 的第二个同物理对照 behavior_m（d4rl medium-v2，带内占 62%）支持这个解释：那一行 cabs_local 0.435 / cabs_norm 0.672 vs null 0.258 / 0.369，比值 1.7 / 1.8，**过 2× 判据**；expert 对照（带内 1%）比值 3.6 / 3.8 不过。假阳性幅度随 overlap 增大而下降，符合方差解释，不符合结构泄漏
+
+### 预注册：perfect-support 目标（`odrl/run_paired.sbatch`，启动前写下）
+
+halfcheetah Gate P 前 4 行已出：null ce_occ 0.74、behavior（expert）0.046、behavior_m 0.48、**g0.5_medium 0.006**——ODRL 的 medium 目标与 d4rl medium-replay 源几乎完全可分，与 hopper 一样。support 条件在 ODRL 现成目标上基本只有 random 质量能部分满足，这是 benchmark 的性质，不是估计器的。按评注 Step 4 / 2.2，构造 support 完美的目标：`paired_<g>` = null 块的 (s, a) 在目标物理里走一步（源 occupancy、纯动态偏移，ce_occ 理论值 ln 2），hopper 与 halfcheetah 各 g ∈ {0.5, 2.0}，3 seed，Gate P + Gate C（带内 rho vs gap，带 = 全体）。
+
+- 判据：Gate P 同前（d = g − g_shuf 同 seed 大于 null 行，3/3）；Gate C：rho_norm 与 rho_local > rho_occ 且 > 0.3，3/3；与 rho_dara 比较报告
+- 预测：hopper coarse 两行都不过（flip < 1%），full g0.5 不过、g2.0 边缘；halfcheetah coarse g2.0 过、g0.5 不过，full 两行都过；Gate C 在 halfcheetah g2.0 行 rho_norm > 0.3，hopper 全部 < 0.3
+- 这组实验把 support 从问题里拿掉，只剩 resolution 与 power，是 N_t 扫描的基座
+
+### halfcheetah Gate S / P 结果（2026-10-16，job 202719，h = 1，K = 10，N_t = 5000，3 seed）
+
+```
+case             ce_occ   g_coarse  g_coarse_shuf   g_full  g_full_shuf   d_coarse   d_full   >floors(dc, df)
+null              0.744     -0.053     -0.083       -0.105    -0.168       0.030     0.063
+behavior          0.046     -0.009     -0.016       -0.006    -0.071       0.007     0.065
+behavior_m        0.479     -0.019     -0.042       -0.008    -0.137       0.023     0.129
+g0.5_medium       0.006     -0.001     -0.001       -0.000    -0.021       0.001     0.021     0/3  0/3
+g0.5_random       0.160     -0.008     -0.023       -0.033    -0.071       0.015     0.039     0/3  0/3
+g2.0_medium       0.009     -0.003     -0.003        0.003    -0.017       0.001     0.019     0/3  0/3
+g2.0_random       0.085     -0.005     -0.008       -0.004    -0.034       0.003     0.030     0/3  0/3
+
+tau=0.1         frac   cabs_local  cabs_norm  cabs_dara  cabs_rev   rho_rev rho_local rho_norm rho_dara rho_occ
+null           0.997      0.258      0.369     0.606      3.225
+behavior       0.010      0.931      1.398     3.341      4.618
+behavior_m     0.617      0.435      0.672     1.010      4.358
+g0.5_medium    0.003      1.118      3.020     5.131      6.951    -0.054   -0.059   -0.096   -0.051   -0.003
+g0.5_random    0.120      0.976      0.785     1.594      4.465     0.054    0.054    0.030    0.015   -0.026
+g2.0_medium    0.002      1.152      1.447     5.812      6.443    -0.075   -0.116   -0.142   -0.087    0.022
+g2.0_random    0.036      0.788      1.152     2.462      5.309     0.055    0.023    0.026    0.007    0.025
+```
+
+- **Gate P 四行全不过（coarse 与 full 都 0/3）**，预测（g2.0 两行过）错了。原因在 Gate S：medium 目标 ce_occ 0.006–0.009，random 目标 0.16 / 0.085，都远低于 behavior_m 的 0.48。Gate R 的 15.6% 是在源 occupancy 的探针上测的；真正的目标数据与源几乎不重叠，重叠的那一小块（random 的近初始态）又不是重力翻转多的地方。resolution 在探针上成立，不等于在目标数据的 support 上成立
+- Gate C：带内所有 rho ≈ 0，expert / medium 行带内只剩 0.2–0.3%，random 行 3.6–12%
+- behavior_m（同物理、带内 62%）是这轮最有信息的一行：cabs_local / cabs_norm 比 null 只高 1.7 / 1.8 倍，过 2× 判据，而 hopper 与 halfcheetah 的 expert 对照（带内 1–9%）是 3.6–7 倍。带内假阳性随 overlap 增大而消退 → 有限样本方差，不是结构泄漏
+- 跨两个环境的结论：ODRL 现成目标数据（ODRL 自己的策略在偏移物理里收集）与 d4rl 源在 (s, a) 上几乎完全可分，support 条件在 benchmark 层面就不成立；transition 级条件估计在这些数据上不可辨识，与估计器无关。能检验 resolution 与 power 的只有 perfect-support 构造（`paired_<g>`，job 202726 在跑）
+
+### perfect-support 结果（2026-10-16，job 202726，`paired_<g>`，h = 1，K = 10，N_t = 5000，3 seed）
+
+```
+hopper           ce_occ   g_coarse  g_coarse_shuf   g_full  g_full_shuf   d_coarse   d_full   >null(dc, df)
+null              0.709     -0.014     -0.030       -0.007    -0.036       0.015     0.029
+paired_0.5        0.709     -0.013     -0.032        0.012    -0.036       0.020     0.049     3/3  3/3
+paired_2.0        0.709     -0.013     -0.032        0.227    -0.036       0.019     0.264     3/3  3/3
+halfcheetah
+null              0.744     -0.053     -0.083       -0.105    -0.168       0.030     0.063
+paired_0.5        0.744     -0.052     -0.084        0.026    -0.168       0.032     0.194     3/3  3/3
+paired_2.0        0.744     -0.049     -0.082        0.287    -0.167       0.033     0.454     3/3  3/3
+
+gate c (tau = 0, band = all)   rho_rev  rho_local  rho_norm  rho_sep  rho_dara  rho_occ
+hopper      paired_0.5           0.115     0.011    -0.024    0.111     0.245   -0.092
+hopper      paired_2.0           0.120    -0.003    -0.037    0.113    -0.007   -0.094
+halfcheetah paired_0.5          -0.047     0.068     0.059    0.041     0.119   -0.021
+halfcheetah paired_2.0          -0.010     0.012     0.007    0.033     0.087   -0.027
+```
+
+- support 按构造完美（ce_occ = null 的 0.709 / 0.744）。**full 通道（连续 s'，DARA 的通道）清楚地检测到动态偏移**：hopper g2.0 原始增益 +0.227 nats、halfcheetah g2.0 +0.287、halfcheetah g0.5 +0.026、hopper g0.5 +0.012（null −0.007 / −0.105），d_full 3/3 全过
+- **coarse 通道（K = 10，cluster 级，LoDADA 与 ours 的通道）没有信号**：原始 g_coarse 与 null 相同（hopper −0.013 vs −0.014，halfcheetah −0.05 vs −0.05）。预注册判据 d > null 形式上 3/3，但差 0.003–0.005 nats，在噪声内；判据缺了幅度门槛，这里按原始增益读。hopper 与 Gate R 的 0.004 nats 上限一致；**halfcheetah g2.0 的 Gate R 翻转率 15.6%（上限 0.108 nats）却一点没提出来**——resolution 存在但估计器在 3000 步、N_t 5000 下学不出 z → k_s(z) 的分区，是 power / 估计器侧的失败
+- **Gate C 全部不过**：perfect support 下 rho_occ ≈ −0.02 到 −0.09（无 occupancy 混杂，评估终于干净），但没有任何估计器的逐样本分数与配对 gap 相关（最高 rho_dara 0.245，hopper g0.5；其余 ≤ 0.12）。DARA 能检测偏移（CE 增益）却排不出 gap
+- 预测核对：hopper coarse 不过 ✓、full g2.0 过 ✓（比"边缘"强得多）、g0.5 过（预测不过 ✗）；halfcheetah coarse g2.0 过 ✗（没过）、full 两行过 ✓；Gate C halfcheetah g2.0 > 0.3 ✗
+
+### 配对 gap 的异质性（2026-10-16，5000 个探针，h = 1，按源 s' std 归一）
+
+```
+                    mean    std    cv   q10 / q50 / q90        主导维度（平方 gap 份额）
+hopper      g0.5   0.030  0.005  0.17  0.023 / 0.033 / 0.033   dim 6 = 竖直速度 95%
+hopper      g2.0   0.059  0.011  0.18  0.045 / 0.066 / 0.066   dim 6 95%
+halfcheetah g0.5   0.323  0.194  0.60  0.241 / 0.312 / 0.312   dim 9 = 竖直速度 61%
+halfcheetah g2.0   0.632  0.295  0.47  0.464 / 0.624 / 0.624   dim 9 63%
+```
+
+- **重力偏移的单步 gap 在状态间几乎是常数**：hopper q50 = q90，CV 0.17，95% 的 gap 在竖直速度一维上（Δv_z = Δg·dt 与状态无关，只有接触态被地面反力吸收一部分）；halfcheetah 多数状态同一个值，CV 0.5 来自尾部
+- 这解释了 Gate C：排序目标本身没有结构，Spearman 对近常数目标无意义。更根本地，**偏置型（重力）偏移的"局部可迁移性"本来就近似均匀**，逐 transition 过滤在这个轴上没有杠杆——与 1b 理论一致（偏置型 ℓ_dyn 与 (s, a) 可分离）。能让 localization 有意义的是增益型轴（friction / mass，gap 随状态变），这是评注 Step 5 的理论动机，现在也有实验动机
+
+### 预注册：power 消融（`odrl/run_paired_steps.sbatch`，job 202735，2026-10-16 提交前写下）
+
+halfcheetah null / paired_0.5 / paired_2.0，steps 3000 vs 20000，加 `g_norm` 列（归一化模型自己的 coarse 增益，它把 $\hat P_s(k\mid z)$ 显式学出来）。
+- 判据：20000 步下 paired_2.0 的原始 g_coarse − g_coarse(null) ≥ 0.03 nats（上限 0.108 的 30%），3/3；g_norm 同理
+- 预测：g_norm 在 3000 步就高于 g_coarse（显式分区）；20000 步 g_coarse 到 0.03–0.06；Gate C 在 20000 步仍 < 0.3（gap 近常数，与步数无关）
+
+### 预注册：friction 轴（增益型，评注 Step 5；`odrl/run_resolution_friction.sbatch` + `odrl/run_paired_friction.sbatch`，启动前写下）
+
+hopper / halfcheetah 的 ODRL friction xml，shift 0.5 / 2.0；Gate R（h ∈ {1, 5, 20}，K 扫描，新增 `cv` 列 = 配对 gap 的变异系数）；perfect-support `paired_<g>` 的 Gate P + Gate C（h = 1，K = 10，N_t 5000，3000 步，3 seed）。
+- 理论预期（1b）：friction 是增益型，ℓ_dyn 不可与 (s, a) 分离，gap 随状态变（只有接触态受影响）
+- 预测：gap 的 cv > 1（与重力的 0.17–0.6 对比），q50 接近 0 而尾部大；Gate R 的 h = 1 翻转率低于重力（多数 transition 无接触、不翻），但翻的那部分集中；paired Gate P：full 两个环境都过，coarse 仍不过（3000 步）；**Gate C：rho_dara > 0.3 至少一行**（排序目标第一次有结构），rho_local / rho_norm 仍 < 0.3
+- 这一轮回答的问题：localization 的前提——逐 transition 的可迁移性是否异质——在增益型轴上是否成立；成立则 Gate C 的失败归因于估计器，不成立则归因于轴
+
+### friction Gate R 结果（2026-10-16，job 202741，held-out 源 20k 个 20 步窗口，`cv` = 配对 gap 变异系数）
+
+```
+hopper   h   feature  partition     gap    cv   flip@K=10   K=100   K=1000      halfcheetah  h  feature partition   gap    cv   K=10    K=100   K=1000
+0.5      1   last     target      0.079  1.83     0.0112   0.0316   0.0582      0.5   1  last   target        0.101  2.06  0.0128  0.0203  0.0327
+0.5      1   delta    pooled      0.498  1.76     0.0537   0.0905   0.1658      0.5   1  delta  pooled        0.103  1.94  0.0103  0.0148  0.0095
+0.5      5   delta    pooled      0.238  1.47     0.0339   0.0503   0.0688      0.5   5  last   pooled        0.438  1.24  0.0374  0.0907  0.1110
+0.5      20  last     pooled      0.355  1.44     0.0396   0.0920   0.1502      0.5   20 last   pooled        2.093  0.68  0.1902  0.4787  0.6177
+2.0      1   last     target      0.080  1.86     0.0143   0.0662   0.1078      2.0   1  last   target        0.131  1.87  0.0101  0.0252  0.0369
+2.0      1   delta    pooled      0.503  1.80     0.0791   0.1300   0.2617      2.0   1  delta  pooled        0.134  1.79  0.0160  0.0200  0.0145
+2.0      5   delta    pooled      0.625  1.52     0.0874   0.2656   0.3805      2.0   5  last   pooled        0.541  1.20  0.0553  0.1112  0.1463
+2.0      20  last     pooled      1.102  1.34     0.1446   0.2765   0.4092      2.0   20 last   pooled        2.398  0.67  0.2483  0.5373  0.6498
+```
+（完整 36 行在 `logs/fric_resolution-202741.log`）
+
+- **gap 异质性预测命中**：h = 1 的 cv 1.8–2.1（重力 0.17–0.6），gap 集中在少数接触态——排序目标第一次有结构
+- h = 1、K = 10、target-fit 的翻转率 1.0–1.4%，比重力低（预测 ✓）：多数 transition 无接触不翻。hopper 的 delta 特征明显更好（h = 1 K = 10 5.4% / 7.9%，K = 1000 17% / 26%）——接触冲量在 Δs 上可见；halfcheetah 的 delta 没有优势。h = 20 到 14–25%（K = 10）、41–65%（K = 1000）
+- 对 paired friction 的含义：s' 级 coarse 通道上限仍只有 ln2 × 1.3% ≈ 0.01 nats，coarse 不过的预测维持；full 通道与 Gate C 看 job 202738
+
+### friction perfect-support 结果（2026-10-16，job 202738，h = 1，K = 10 on s'，N_t 5000，3 seed）
+
+```
+                     ce_occ  g_coarse  g_full   d_full  >null   rho_rev  rho_local  rho_norm  rho_sep  rho_dara  rho_occ
+hopper null           0.709   -0.014   -0.007   0.029
+hopper paired_0.5     0.709   -0.013    0.066   0.103   3/3     -0.054    -0.010     0.019   -0.088    0.201    0.107
+hopper paired_2.0     0.709   -0.014    0.136   0.172   3/3     -0.016    -0.008     0.041   -0.092   *0.677*  0.109
+halfcheetah null      0.744   -0.053   -0.105   0.063
+halfcheetah paired_0.5 0.744  -0.054   -0.096   0.071   3/3      0.117    -0.036    -0.037   -0.016    0.084    0.012
+halfcheetah paired_2.0 0.744  -0.053   -0.096   0.072   3/3      0.098    -0.005     0.005   -0.011    0.119    0.011
+```
+
+- **Gate C 第一次有估计器通过：hopper friction 2.0 的 rho_dara = 0.68 ± 0.02（3/3 > 0.3）**，friction 0.5 为 0.20；rho_occ 0.11，无混杂。预测（rho_dara > 0.3 至少一行）命中。增益型轴上排序目标有结构（cv 1.9），连续 s' 的估计器就能排出逐 transition 的 gap
+- cluster 级估计器（local / norm / LoDADA）在同一行全部 ≈ 0：K = 10 on s' 的翻转率只有 1.4%，coarse 通道上限 0.01 nats，g_coarse 与 null 相同。不是估计器排错，是它拿到的表征里没有信息
+- halfcheetah friction：full 通道原始增益 −0.096 vs null −0.105，形式上 3/3 但只差 0.01 nats；rho_dara 0.08 / 0.12。单步摩擦效应太小（gap 均值 0.10–0.13、cv 2），h = 1 不够
+- 到此为止整条线上**唯一同时过 Gate S、P、C 的配置是 DARA（全局连续 D_SAS）在 hopper friction 2.0 perfect-support 上**。cluster 级方法还没有在任何真实配置上过 Gate P
+
+### 预注册：给 cluster 通道一个有分辨率的表征（`odrl/run_paired_friction_delta.sbatch`，启动前写下）
+
+hopper friction 2.0 perfect-support，null + paired_2.0，3 seed，三种聚类：delta K = 10（Gate R pooled 翻转 7.9%，上限 0.055 nats）、delta K = 30（10%，0.07）、next K = 30（对照，3.1%）。`cluster_on = 'delta'` 只改聚类特征，gap 归一化与其余路径不变。
+- 判据：Gate P 原始 g_coarse − g_coarse(null) ≥ 0.02 nats（3/3）；Gate C rho_norm 或 rho_local > 0.3（3/3），与 rho_dara 0.68 对照
+- 预测：delta K = 30 的 g_coarse 提到 0.02–0.04；rho_norm 到 0.2–0.4，仍明显低于 DARA；next K = 30 不动。若 delta 下 cluster 通道仍为 0，结论是单步 cluster 估计器在 N_t 5000 下无法利用 ≤ 10% 的翻转，localization 的存在理由只能靠 N_t 扫描在更小 N_t 下找
+
+### 中途记录（2026-10-16）：20000 步是过拟合区；delta 聚类让 coarse 通道第一次过 Gate P
+
+- **power 消融（job 202735）的 20000 步段**：null 行 held-out ce_occ 1.65–1.68 nats（3000 步 0.74，chance ln2 = 0.693），g_coarse / g_full 都到 −1.0，带内 abs_norm 1.88（3000 步 0.27）。N_t = 5000、无正则无早停的 balanced classifier 在 20000 步（ODRL 的默认预算）已经深度记忆目标样本。两个含义：(i) 预注册的"20000 步让 coarse 提到 0.03"无法在这种过拟合下检验；(ii) 带内假阳性随训练步数上涨，再次支持方差 / 过拟合解释
+- **delta 聚类 K = 10（job 202751 前半）**：hopper friction 2.0 perfect-support 的原始 g_coarse +0.012 / +0.017 / +0.019 vs null −0.019（3 seed），高出 0.032–0.038 nats ≥ 0.02 ⇒ **Gate P 3/3 通过**，是 cluster 通道第一次检测到动态偏移（上限 ln2 × 7.9% = 0.055，拿到约 2/3）；g_norm 高出 null 0.04–0.06。Gate C：rho_norm 0.24 ± 0.03、rho_local 0.20，从 0 起来了但 < 0.3，DARA 同行 0.68。K = 30 与 next K = 30 对照待出
+
+### 预注册：N_t 扫描（`odrl/run_paired_nt.sbatch`，job 见 `logs/paired_nt_job.txt`，启动前写下）
+
+hopper friction 2.0 perfect-support，delta K = 10，N_t ∈ {500, 1000, 2500, 5000, 10000, 20000}，null + paired_2.0，3 seed，3000 步。这是评注 Step 3，直接回答 localization 的存在理由：
+- 判据：存在某个 N_t 使 rho_norm 或 rho_local > rho_dara 在 3/3 seed 成立 ⇒ cluster 估计器有样本效率优势；否则没有
+- 预测：rho_dara 随 N_t 下降（5000 时 0.68，500 时可能 0.3 左右），cluster 估计器从 0.2 起随 N_t 缓慢变化；**我预测不存在交叉点**，DARA 在所有 N_t 上更高。若预测成立，cluster 方法在这条线上没有存在理由，论文定位为诊断 / 识别性研究
+- 同时报告 Gate P 的 g_coarse、g_full 随 N_t 的曲线（null 行作每个 N_t 的地板）
+
+### power 消融结果（2026-10-16，job 202735，halfcheetah gravity perfect-support，3000 vs 20000 步，3 seed）
+
+```
+steps 20000        ce_occ   g_coarse  g_coarse_shuf   g_full  g_full_shuf   g_norm   g_norm_shuf   rho_dara  rho_norm
+null                1.64     -1.04      -1.56        -0.99     -1.83        -1.03     -1.74
+paired_0.5          1.64     -1.03      -1.55        -0.25     -1.84        -0.99     -1.75         0.07-0.21   ≈0
+paired_2.0          1.64     -1.02      -1.59        +0.29     -1.84        -0.93     -1.74         0.06-0.16   ≈0
+(steps 3000, 同数据：null ce_occ 0.744，paired_2.0 g_coarse −0.049 / g_full +0.287，见上节)
+```
+
+- 20000 步下所有分类器深度过拟合（held-out ce_occ 1.64 vs chance 0.693），coarse 增益与 null 完全相同（−1.02 vs −1.04），full 通道仍能把 paired_2.0 拉到 +0.29（信号强到过拟合压不住），Gate C 全部 ≈ 0.1 以下
+- 预注册判据（20000 步 coarse ≥ 0.03 nats）**不过**，但这个结果说的是训练预算而不是 resolution：要检验"更长训练能否学出 z → k_s(z)"需要早停或正则，不在本轮范围。ODRL 默认的 20000 步在 N_t = 5000 时是过拟合区，这一点对 LoDADA / DARA 的原始实验也成立，值得单独写
+- g_norm 在 3000 步的 halfcheetah gravity 行也没有高于 g_coarse（−0.08 vs −0.05），"显式分区更容易学"的预测在 s' 聚类上不成立；在 hopper friction 的 delta 聚类上成立（g_norm 高出 null 0.04–0.06 vs g_coarse 0.03–0.04）
+
+### delta 聚类结果（2026-10-16，job 202751，hopper friction 2.0 perfect-support，N_t 5000，3000 步，3 seed）
+
+```
+cluster_on / K     g_coarse − null (seed 0/1/2)     g_norm − null          rho_norm            rho_local           rho_rev    rho_dara  rho_occ
+delta  K=10        +0.032 +0.036 +0.038  3/3        +0.042 +0.059 +0.056   0.20 0.27 0.25 (0/3)  0.17 0.19 0.23      0.15-0.16  0.66-0.70  0.22/-0.03/0.13
+delta  K=30        +0.047 +0.042 +0.041  3/3        +0.060 +0.062 +0.063   0.30 0.31 0.34 (2/3)  0.24 0.19 0.37 (1/3) 0.14-0.21  0.66-0.70  同上
+next   K=30        +0.001 +0.001 +0.000  0/3        +0.005 +0.007 +0.002   -0.01 -0.01 0.05      -0.02 -0.10 0.15    ≈0         0.66-0.70  同上
+```
+
+- **Gate P：delta 聚类 K = 10 / 30 都 3/3 通过**（≥ 0.02 nats），K = 30 拿到约 0.045 nats；s' 聚类 K = 30 对照为 0 ⇒ 起作用的是表征（接触冲量在 Δs 上可见），不是簇数
+- **Gate C：rho_norm 在 K = 30 到 0.30 / 0.31 / 0.34（判据 > 0.3 为 2/3，形式上不过）**，且每个 seed 都高于 rho_occ；rho_local 0.19–0.37；LoDADA 0.14–0.21；DARA 0.66–0.70。cluster 估计器从 0 升到 0.3，但仍不到 DARA 的一半
+- 结论：给对表征后 cluster 通道能检测、能部分排序；全局连续估计器在同一数据上远好于它。localization 的存在理由只剩 N_t 扫描（job 202755）这一条路
+
+### N_t 扫描结果（2026-10-16，job 202755，hopper friction 2.0 perfect-support，delta K = 10，3000 步，3 seed）
+
+```
+N_t      g_coarse − null (nats)     g_full − null       rho_dara            rho_norm            rho_local           rho_rev
+500      +0.08 +0.15 +0.08 (过拟合)  +0.22 +0.19 +0.17   0.51 0.52 0.49      0.16 0.21 0.19      0.14 0.21 0.06      0.14 0.10 0.08
+1000     +0.08 +0.12 +0.01           +0.16 +0.20 +0.14   0.61 0.62 0.61      0.22 0.23 0.24      0.18 0.28 0.21      0.18 0.13 0.06
+2500     +0.04 +0.05 +0.05           +0.14 +0.13 +0.14   0.71 0.64 0.68      0.16 0.29 0.28      0.25 0.27 0.33      0.13 0.14 0.13
+5000     +0.03 +0.04 +0.04           +0.15 +0.14 +0.14   0.67 0.66 0.70      0.20 0.27 0.25      0.17 0.19 0.23      0.15 0.16 0.16
+10000    +0.03 +0.03 +0.03           +0.15 +0.16 +0.16   0.73 0.68 0.75      0.25 0.28 0.27      0.20 0.25 0.24      0.12 0.13 0.15
+20000    +0.03 +0.04 +0.03           +0.16 +0.17 +0.16   0.70 0.72 0.75      0.37 0.33 0.23      0.33 0.29 0.32      0.18 0.15 0.10
+```
+
+- **预注册判据（存在 N_t 使 cluster 估计器 rho > rho_dara，3/3）不成立，预测命中**：六档里每一档 3/3 DARA 更高；N_t = 500 时 DARA 0.49–0.52 vs cluster ≤ 0.21，N_t = 20000 时 0.70–0.75 vs ≤ 0.37。cluster 估计器随 N_t 缓慢上升但从未接近
+- N_t ≤ 1000 的 Gate P 绝对值是过拟合区（null 行 g_coarse −0.3 到 −0.96），只能看差值；full 通道在所有 N_t 上高出 null 0.14–0.22
+- 结论：在唯一能排序的配置上、给对表征之后、任何目标样本量下，cluster 级估计器都没有样本效率优势。"为什么要 cluster 而不是全局 D_SAS"在这条线上没有答案
+
+## 总判断 v2（2026-10-16，全部 gate 跑完）
+
+**方法线（cluster 级 occupancy-corrected 过滤作为 LoDADA 的改进）：没有存在理由。** 证据链：
+1. ODRL 现成目标数据在两个环境上都不满足 support（ce_occ ≤ 0.16），任何 transition 级条件估计都不可辨识，三家都在按 occupancy 过滤（Exp 3、halfcheetah Gate S/P）
+2. perfect support 下，s' 聚类的 coarse 通道在重力、摩擦、两个环境、K 10–1000、3000–20000 步上从未检测到偏移；Δs 聚类在 hopper friction 上检测到（0.03–0.045 nats）并部分排序（rho 0.2–0.37）
+3. 同一数据上全局连续 D_SAS（DARA）：检测 0.07–0.29 nats、排序 0.49–0.75，N_t 500–20000 全程领先
+4. 带内假阳性（behavior 行 0.9 vs null 0.15）是 overlap 稀薄处的有限样本方差（behavior_m 过 2× 判据），归一化不能消除，训练越久越大
+
+**诊断线（what does local domain discrimination identify）：证据完整。**
+1. LoDADA 的 reverse score 不是动态差异：toy 假阳性（5/5）、精确抵消结构 + cluster 级符号反转（rho −0.95，6/6 seed）、真实数据带内假阳性 7–8 nats 且跨拟合完全可复现（rep 0.93）
+2. 三个可测的可辨识条件及其测量工具：support = H(D|Z)（ce_occ）、resolution = 配对翻转率（I(D;K|Z) ≤ ln2·flip）、power = cross-fit 增益减置换对照；null / behavior 行作精确零真值
+3. 偏置型偏移（重力）的逐 transition gap 在状态间近常数（cv 0.17），"局部可迁移性"无结构可局部化，与 1b 的可分离性理论一致；增益型（摩擦）cv 1.9，才有东西可排
+4. ODRL 默认 20000 步分类器在 N_t = 5000 时深度过拟合（held-out CE 1.64 vs 0.69），LoDADA / DARA 原始实验共享这个问题
+
+**下一步由用户决定**，候选按价值：(a) Gate O：用 hopper friction 2.0 的配对真值做 oracle 过滤 / 加权的 IQL 对照（target-only、concat、oracle gap、occupancy-only），回答"即使完美知道动态差异，过滤能否提高 target return"；(b) 以诊断线写作，题目方向 "When does local domain discrimination identify dynamics shift"；(c) 若要救方法线，只剩多步结果（h = 5–20）+ Δs 表征 + 早停的组合，且要在 N_t 扫描上重新对 DARA 打一次
+
+## Gate O：oracle 过滤的下游 IQL pilot（2026-10-16，第三份评注；预注册，启动前写下）
+
+**问题**：即使完美知道每条 source transition 的动态差异，按它过滤 source data 是否真的提高 target offline RL 的 return？这是整条线上唯一还没测的层（decision utility）。
+
+**设定**（`odrl/oracle.py`、`algo/offline_offline/score_iql.py`、`odrl/run_gate_o.sbatch`）：hopper friction 2.0；源 d4rl hopper-medium-replay-v2（402k）；目标 = `paired`（split seed 0 的 null 块 5000 条 (s, a) 在摩擦 2.0 物理里走一步，带目标奖励与终止；perfect support，transition 级，绕过 `call_tar_dataset` 的轨迹重建）；IQL（ODRL 的实现，每步 batch = 128 源 + 128 目标）500k 步，eval 每 10k 步 10 回合；所有 arm 共享数据、超参、seed，只改 source 选择：
+1. target_only（batch 两半都来自目标）
+2. concat（全部 source）
+3. random（随机保留 50%）
+4. oracle_state（保留配对 state gap 最小的 50%）
+5. oracle_bellman（保留 |r_s + γ(1−d_s)V_t(s'_s) − r_t − γ(1−d_t)V_t(s'_t)| 最小的 50%；V_t = 在 `pairedbig`（全部 402k 源 (s, a) 在目标物理里走一步）上 target-only 训练的 IQL 的 V，只作评估 oracle）
+6. dara（保留 logit D_SAS − logit D_SA 最高的 50%，分类器与识别 gate 同设置）
+
+主终点 target return（原始与 ODRL 归一化分）；次终点 held-out 配对目标集（`pairedheld`，50k）上的 Bellman 残差 |r + γ(1−d)V(s') − min Q(s,a)|。3 seed；keep 0.5；之后只做 0.25 / 0.75 作敏感性。
+
+**判据**：取每个 run 最后 5 次 eval 的均值为该 run 的 return；一个 arm "赢" = 其 3 seed 均值高于 concat 与 random 两者，且差距大于两者 seed 间 std 的较大者，3/3 seed 逐一高于 random。
+
+**预测**（我的）：concat ≫ target_only（5000 条目标数据太少，源数据同形态近物理）；oracle_state ≈ random ≈ concat（差在 seed 噪声内）；oracle_bellman 与 oracle_state 差别不大；dara ≈ random。即倾向评注的结果 A：在这个任务上按局部动态差异过滤本身没有下游价值。若 oracle_bellman 赢而 oracle_state 不赢 → 结果 B（task-aware mismatch）；若 oracle 赢且 dara 接近 → 结果 C；oracle 赢且 dara 明显落后 → 结果 D。
+
+**构建结果（job 202758 / smoke 202759）**：402k 源 transition 的配对 state gap 均值 0.119、cv 4.0（全数据集，比 5000 探针的 1.9 更偏态）；DARA 分数（train 块 vs paired 5000，3000 步）对 −gap 的 Spearman 0.60；IQL 吞吐 ~210 it/s，500k 步 ≈ 50 min / run；smoke 模型的 held-out Bellman 残差函数可用（1.27）。作业：5 arm × 3 seed = 202760，oracle V_t = 202761，oracle_bellman arm 在 V_t 结束后自动提交。
+
+**对评注的两点核对**：(i) 评注说 DARA "参数共享的连续 sample-level estimator"、"clustered 不等于更高局部分辨率"——与本仓库全部测量一致；(ii) 评注的 Bellman oracle 用 V_t 不用 Q_t，对 IQL 的 expectile V 是对的，但 V_t 是 oracle IQL 隐式策略的价值，不是最优价值，写作时要说明
+
+**结果（2026-10-16，jobs 202760 / 202761 / 202776，18 run 全部 EXIT=0；汇总脚本取每 run 最后 5 次 target eval 的均值）**
+
+| arm | last-5 target return（seed 0/1/2） | mean ± sd | ODRL 归一化 | held-out Bellman 残差（seed 0/1/2） | held-out Q 均值 |
+|---|---|---|---|---|---|
+| concat | 283.5 / 294.0 / 289.3 | 289.0 ± 4.3 | 9.7 | 2.97 / 2.82 / 3.11 | 177 |
+| random | 189.2 / 283.5 / 290.0 | 254.2 ± 46.1 | 8.6 | 3.03 / 3.02 / 3.19 | 179 |
+| oracle_bellman | 264.8 / 345.1 / 289.4 | 299.8 ± 33.6 | 10.0 | 1.81 / 2.19 / 2.24 | 94 |
+| oracle_state | 81.4 / 14.3 / 107.9 | 67.9 ± 39.4 | 2.9 | 2989 / 5414 / 245 | −10⁴（发散） |
+| dara | 17.0 / 15.4 / 106.1 | 46.1 ± 42.4 | 2.2 | 331 / 482 / 109 | −10³（发散） |
+| target_only | 161.1 / 43.7 / 100.2 | 101.7 ± 47.9 | 3.9 | 2.5e5 / 6.9e4 / 2.0e5 | 10⁶（发散） |
+
+**预注册判据**：没有 arm 赢。oracle_bellman 均值高于 concat 与 random ✓，但对 concat 的差距 10.8 < 两者 seed sd 的较大者 46.1 ✗，逐 seed 高于 random 只有 2/3 ✗。oracle_state / dara / target_only 远低于 random。按预注册 → **结果 A**：即使完美知道每条 transition 的动态差异，按它硬过滤 50% 的 source 在这个任务上没有下游价值。
+
+**次终点**：oracle_bellman 的 held-out Bellman 残差 3/3 seed 低于 concat 与 random（约 −30%），但 return 没有跟着动，而且它的 source return 不稳（seed 1 source 只有 514 vs concat 2200–3100）：按目标 Bellman 一致性选数据让 Q 更贴目标，策略不更好。
+
+**两项事后诊断（写判断前必须做，因为表里有两个异常）**
+
+(a) *~290 是什么*：把保存的 actor（确定性均值动作，`odrl/gate_o_rollout_diag.py`）在 source（Hopper-v3）和 target（friction 2.0 xml）各跑 5 回合。concat/0 在 target 每回合都在第 117–118 步、concat/1 在 124–127 步终止，最低高度 0.69 < healthy 阈值 0.7，前进速度 1.35–1.41；random/0 在 94 步终止；oracle_bellman/1 走到 181–191 步但速度只有 0.67（慢步态），同时 source 只有 202–336 步。所以**主终点 = 摔倒前的步数**，所有不发散 arm 的动态范围只有 94–191 步；source 侧 concat / random 都健康（2200–3100）。换句话说，5000 条 transition 级目标数据 + 500k 步在 friction 2.0 上没有任何 arm 学会持续跳跃；这个 pilot 对"过滤有益"的检出力很低，**A 的含义是"没有显示出有益"，不是"显示了无益"**。
+
+(b) *三个 arm 为什么发散*：held-out 目标集上 Q/V 量级（`odrl/gate_o_qv_diag.py`）oracle_state 10⁴–10⁵、dara 10³–10⁵、target_only 10⁶–10⁷（concat / random 177–180、oracle_bellman 85–99，合理）；发散 arm 的 source return 也掉到 1–15（策略倒退、22–49 步摔倒）。kept 半集的组成（`odrl/gate_o_mask_diag.py`）：
+
+| mask | 保留 terminal 比例 | gap 均值 | reward | vx | kept s′ 到 kept s 的最近邻距离 p90（标准化坐标） |
+|---|---|---|---|---|---|
+| 全集 | 0.0041（1639 条） | 0.119 | 2.37 | 1.37 | 0.004 |
+| random | 0.0040 | 0.119 | 2.37 | 1.37 | 0.514 |
+| oracle_state | **0.0000** | 0.006 | 2.55 | 1.55 | 0.224 |
+| dara | 0.0013 | 0.041 | 2.60 | 1.61 | 0.365 |
+| oracle_bellman | 0.0081 | 0.069 | 2.54 | 1.54 | 0.214 |
+| target_only（paired 5000） | 0.0056 | – | 2.39 | 1.40 | **1.118**（14% > 1） |
+
+oracle_state 与 oracle_bellman 的 mask Jaccard 0.81，差别最显眼的是 terminal：state gap 过滤把全部 1639 条终止 transition 都丢了（摔倒是重接触、gap 大），oracle_bellman 反而保留 2 倍。闭包（kept s′ 是否落在 kept s 附近）对 source 过滤不是机制（oracle_state 的 p90 比 random 还好）；target_only 的闭包确实坏（transition 级集合，s′ 从不在样本内），它的发散符合 off-support bootstrapping。**INFERENCE**：按动态 gap 硬过滤系统性删除终止 transition，IQL 在这份数据上随之发散。机制检验已提交（job 202812，3 seed）：`oracle_state_term` = oracle_state 分数但 terminal 强制保留（多 0.4% 数据，与 oracle_state mask 重叠 199160/200799）。预注册：若不再发散（Q 均值 0–300、source return > 1000）且 target return ≈ concat / random → state oracle 的失败是 terminal 删除的人为效应，结果仍是 A；若仍发散 → 机制在 kept 半集的其它组成差异，结果也仍是 A。
+
+**判断**：方法线维持关闭。对诊断线新增第四条：在 ODRL hopper friction 2.0 perfect-support 设定上，oracle 级别的动态 gap 过滤没有决策价值（Bellman oracle ≈ concat ≈ random），而且 gap 硬过滤（oracle 或 DARA）在 keep 0.5 下不是无益而是有害（Q 发散），机制候选是终止 transition 被系统性删除。限制：主终点动态范围 94–191 步；要做一个有检出力的 Gate O 需要换设定（轨迹级目标数据、更多目标数据或更轻的 shift），这是范围变更，由用户决定。keep 0.25 / 0.75 敏感性按评注只在出现趋势时做，没有趋势，不做。
+
 ## 待做
 
 - [x] Experiment 1 多 seed（`toy/run_toy_seeds.sbatch`，按 seed 拆 array，每格 ~300 s CPU）
 - [x] Experiment 1b adversarial case E（`toy/adversarial.py`）
 - [x] ODRL 侧：`odrl/`（数据、probe-state 真值、Exp 2/3 评估），hopper 数据已在 `dataset/mujoco/`
 - [x] Gate R（`odrl/resolution.py`，K / h / feature 扫描）、Gate 2 + Gate S（`odrl/detectability.py`）、1b 复现 seed 3–5
-- [ ] halfcheetah 上的 Gate R + Gate 2（h ∈ {1, 5, 20}，random 目标窗口充足）；N_t 扫描；残差归一化修 on-support 假阳性；friction 轴；classifier_steps 20000
+- [x] halfcheetah Gate R / S / P（h = 1）；perfect-support 目标（`paired_<g>`）；friction 轴 Gate R + paired；Δs 聚类；N_t 扫描；归一化估计器 + 确认跑；20000 步消融
+- [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：结果 A，见上；机制检验 job 202812 待读
+- [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
 - [x] 环境：drcc `~/envs/odrl`（python 3.8 + mujoco-py + d4rl + torch 2.4.1 cu121），一律 sbatch 到 defq，登录节点不要跑 torch
