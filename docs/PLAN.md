@@ -734,6 +734,18 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 3. **参考跑给出这一格的天花板**：真实目标轨迹 target_only 的 return 334.9 ± 0.1 = 数据本身的 335（学回了行为策略，138 步摔倒，vx 1.44）；参考 concat 297 ≈ paired concat 289。没有任何配置超过行为数据，与文献（全部方法 10.15–10.52）一致。正对照不存在 → 按评注，这个装置不能用来裁决细微的 filtering 收益，第三阶段（DARA 原形式 vs hard filter）不在这一格上做。
 4. 次终点 Bellman 残差：参考 concat 3.1–3.3、参考 target_only 15–18（在 paired held-out 上，它只见过 5000 条真实轨迹）；发散 arm 10²–10³，无信息。
 
+**换格的依据（FACT，2026-10-16 核对）**。LoDADA Table 1 全表（arXiv 2602.21072v1，medium 源 1M + 目标 5000）：32 格里 **hopper friction 2.0 是唯一一格六方法差距 < 1 分（0.37）**；21 格差距 ≥ 10 分；LoDADA 大幅领先的格有 halfcheetah gravity 5.0（71.1 vs IQL 20.9）、ant friction 2.0（62.3 vs 17.5）、walker2d gravity 0.1（71.4 vs 20.1）、hopper gravity 0.5（43.7 vs IQL 17.8 / DARA 14.7）；论文不报各格目标数据的回报。本地已有的 ODRL 目标 hdf5 的回合结构（5000 行；halfcheetah 全是 timeout、无 terminal）：
+
+| 目标数据 | 回合数 | 回合长度 中位 / 范围 | 回合 return 中位 / 范围 | vx | LoDADA 表差距 |
+|---|---|---|---|---|---|
+| hopper friction 2.0 medium | 36 | 138 / 137–139 | 335 / 332–339 | 1.41 | 0.37 |
+| hopper gravity 2.0 medium | 20 | 233 / 228–285 | 752 / 744–907 | 2.23 | 6.6 |
+| hopper friction 0.5 medium | 8 | 336 / 320–1321 | 1117 / 1038–4277 | 2.26 | 8.8 |
+| **hopper gravity 0.5 medium** | 7 | 660 / 505–815 | 2397 / 1785–2885 | 2.57 | **29.0** |
+| hopper gravity 0.5 expert | 5 | 988 / 896–999 | 4126 / 3746–4186 | 3.12 | – |
+
+若要再做一次有正对照的 Gate O，首选 **hopper gravity 0.5 medium**：同环境只换轴与强度（本仓库 gravity 轴的 Gate R / S / P 已有），目标数据示范了 500–815 步的持续跳跃，文献里 IQL 17.8 / DARA 14.7 / LoDADA 43.7 说明方法间有可测差距。代价：gravity 是偏置型 shift（gap cv 0.17，近常数），一步 gap 排序本身区分度低，这正好是检验"dynamics-aware 数据复用的收益是否需要局部分辨率"的格。先做的事：参考 target_only（真实目标轨迹）是否 ≥ 数据本身、concat 是否 < target_only（有适配空间），再上任何 score。
+
 **Gate O 最终表述**：未达预注册收益判据；本装置（paired 目标、全局 50% hard-selection、ODRL-IQL、hopper friction 2.0）没有正对照，天花板 = 行为策略，不能作为 dynamics-aware data reuse 无效的证据。可保留的、被复现的负结果只有一条：**按一步动态 gap 硬保留低 gap 半集会毁掉 IQL**（3 变体 × 3 seed），而且一步 gap 对数据选择的分辨率有限（48% 恰为 0）。要测 dynamics-aware data reuse 的决策价值，得换一个有正对照的 benchmark 格（目标数据示范成功、文献方法间有差距），这是用户的决定。
 
 **结论改写（按评注第十节，替代 "Gate O 结果 A → 方法线关闭" 的强版本）**
@@ -753,7 +765,7 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 - [x] halfcheetah Gate R / S / P（h = 1）；perfect-support 目标（`paired_<g>`）；friction 轴 Gate R + paired；Δs 聚类；N_t 扫描；归一化估计器 + 确认跑；20000 步消融
 - [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：未达判据；oracle_state 的 terminal 全删是 D4RL `qlearning_dataset` 语义的人为效应（第四份评注审计），不是物理 gap 的性质
 - [x] 第四份评注：A 审计 / C 随机加回 / 修正 arm / 参考跑已读并写回；正对照失败 → 第三阶段不在 hopper friction 2.0 上做
-- [ ] 若要继续 Gate O：选一个有正对照的 benchmark 格（目标数据示范成功、文献方法间有差距）；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
+- [ ] 若要继续 Gate O：首选 hopper gravity 0.5 medium（见"换格的依据"），先跑参考 target_only / concat 确认有适配空间；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
