@@ -825,6 +825,18 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 
 **预注册：训练强度对照（启动前写下，job 见 `logs/gate_o_jobs.txt`）**。`target_only` 同协议只跑 250k 步（目标样本总数 = concat 500k 步的 128 × 500k，更新次数减半，eval 25 次，仍取最后 5 次均值）。这是保守对照：它只会让 target_only 变差。预测：last-5 target 1500–2100、仍逐 seed 高于 concat 的 414–568 ≥ 900；若 ≤ 700，则 concat 的劣势可能主要是目标项训练强度，negative transfer 的结论要收回。loss 系数差异（concat 里目标行只占梯度的一半）这个对照不覆盖，要单独说明。
 
+**训练强度对照结果（job 202850，2026-10-17，`target_only` 250k 步，3/3 EXIT=0）**
+
+| seed | target last-5 | 归一化 | source last-5 | 目标回合长度 | vx | Q 均值 / max |
+|---|---|---|---|---|---|---|
+| 0 | 1633.4 | 50.9 | 334 | 485 | 2.28 | 329 / 407 |
+| 1 | 1539.9 | 48.0 | 353 | 518 | 2.30 | 328 / 407 |
+| 2 | 1883.3 | 58.6 | 425 | 513 | 2.34 | 330 / 406 |
+
+均值 1685.5 ± 144.9（归一化 52.5），逐 seed 高于 concat +1065 / +1126 / +1356。预测 1500–2100、逐 seed ≥ +900 → **✓**。目标样本总数与 concat 持平、更新次数减半，target_only 仍比 concat 高 3 倍以上；比 500k 步版本低 230（更新减半的代价），方向符合"保守对照"。结论：concat 的劣势不是目标项采样次数造成的；loss 系数差异（concat 里目标行只占梯度一半）未被这个对照覆盖，仍要说明。
+
+**Gate O2 定论**：在 hopper gravity 0.5 medium 这一格，加入 1M 条源 medium 数据对 ODRL-IQL 是净有害的（−72% target return，3/3 seed，不由目标采样强度解释），concat 复现文献 IQL 基线，纯目标 5000 条高于文献所有方法。这一轮到此为止，不启动 score / 过滤器。下一步由用户决定：(a) 跨格跑 target-only 基线（判断"源数据净有害、方法只部分恢复"是特例还是系统性现象，第四类范式候选主张）；(b) 在本格做一个受控数据使用方式（如 DARA 原形式 reward correction，128 + 128 同协议）看能否保住 target-only 水平；(c) 梯度权重对照（concat 中目标项权重 ×2）补上 loss 系数这一项。
+
 ## 待做
 
 - [x] Experiment 1 多 seed（`toy/run_toy_seeds.sbatch`，按 seed 拆 array，每格 ~300 s CPU）
@@ -836,7 +848,8 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 - [x] 第四份评注：A 审计 / C 随机加回 / 修正 arm / 参考跑已读并写回；正对照失败 → 第三阶段不在 hopper friction 2.0 上做
 - [x] 干净子集复核（job 202843）：两项预测成立
 - [x] Gate O2 六个基线 run：决策表第一行（target_only 1915 ± 130 vs concat 503 ± 65，concat = 文献 IQL）
-- [ ] 训练强度对照 target_only 250k 步（job 202850）
+- [x] 训练强度对照 target_only 250k 步（job 202850）：1686 ± 145，仍 +1065…+1356 高于 concat
+- [ ] 用户决定：跨格 target-only 基线 / 本格受控数据使用方式 / 梯度权重对照
 - [x] 原文协议核对：同 500K 步 / 128 + 128 / 同超参，两篇都无 target-only 基线用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
