@@ -883,6 +883,25 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 
 **第二批建议顺序（待批）**：(1) BC 沿 N_t 轴 9 run；(2) 相对损失权重扫描 λ ∈ {0, 1/8, 1/4, 1/2} 在 N_t = 5000 与 N_t = 1000 两个点（预先规则：发现格的默认点 + 交叉点下方一点），Q / V / actor 共用 λ；(3) 六格面板。
 
+### 第二批预注册（2026-10-17，用户批准 1/2/3 全做，启动前写下）
+
+**(1) BC 沿 N_t 轴**（`odrl/run_nt_sweep.sbatch` `BC=1`，array 0-8，N_t ∈ {500, 1000, 2000} × seed，嵌套子集与 IQL 两臂相同）。
+预测：BC 的 actor loss 不含 critic，不会发散；BC(500) 300–900、BC(1000) 600–1300、BC(2000) 1100–1700；BC(500) 3/3 高于 IQL target_only(500) = 191；BC(500) 对 concat(500) = 488 ≥ 2/3 配对为正（把握不大）。
+判读规则：若 BC(N_t) 在每个 N_t 上 ≥ concat(N_t)（配对 ≥ 2/3）→ 小 N_t 下 concat 的"优势"是 IQL 不稳定的人为效应，小数据下正确的简单基线是 BC，"默认复用在小数据有效"改写为"IQL target-only 在小数据发散而 BC 不会"；若 BC(500) 也塌（< 300）→ 交叉点是数据信息量的性质；混合 → 逐 N_t 报，不概括。
+
+**(2) λ 扫描**（`odrl/run_lambda_sweep.sbatch`，array 0-23，λ ∈ {0, 1/8, 1/4, 1/2} × N_t ∈ {5000, 1000} × seed；`score_iql` 新增 `source_weight`，L = (1−λ)·mean_target + λ·mean_source，V / Q / actor 共用；`odrl/check_weighted.py` 在 smoke 里验证 λ = 1/2 与原 concat 路径同批次参数更新一致、λ = 0 与"只用目标半批"一致）。
+两个端点的身份：λ = 1/2 ≡ concat（复现）；λ = 0 ≡ target_only 但每步只有 128 条目标样本（target_only 臂是 256 条），所以 λ = 0 与 target_only 的差同时是"目标批大小"的对照。
+预测：N_t = 5000 上单调：λ = 0 → 1600–2100（≈ target_only），1/8 → 1000–1700，1/4 → 600–1200，1/2 → 400–600；N_t = 1000 上：λ = 0 多数 seed 发散（150–600），1/2 → 380–520，1/8 与 1/4 是真正的问题所在——预测 1/8 落在 500–1200，可能同时高于两个端点（小权重的源数据稳住 critic 而不淹没目标）。
+判据：某 λ 在某 N_t 上"赢" = 3 seed 均值高于 λ = 0 与 λ = 1/2 两者，差距大于两者 seed sd 的较大者，且 3/3 seed 高于 λ = 1/2。
+判读：5000 上没有 λ > 0 赢 → 在发现格里任何正的源权重都是净损害（G_reuse 在该格对 λ 单调为负）；1000 上某 λ 赢 → 复用存在硬 concat 错过的权重窗口（只是该格该 N_t 的结论，第三批 DARA 要以它为参照）；1000 上 λ < 1/2 全部像 λ = 0 一样发散 → 稳定化需要的源权重不小于某阈值，和"信息"无关。
+
+**(3) 六格面板**（`odrl/run_panel.sbatch`，array 0-44；{hopper, halfcheetah, walker2d} × {gravity 0.5, friction 0.5}，源 d4rl `*-medium-v2`，目标 ODRL `*_{axis}_0.5_medium`（5000 条，`call_tar_dataset` 语义），臂 target_only / concat / bc（BC 纳入：第一批 BC(5000) 与 IQL target_only 差 ≤ 300），3 seed；hopper gravity 0.5 复用 Gate O2 + BC 的 9 个 run；`config/mujoco/score_iql/{halfcheetah,walker2d}.yaml` 与 hopper 同超参（ODRL 三个机器人的 IQL 配置本来相同）。walker2d 目标与源数据本次新下载）。
+预测：target_only 在 hopper friction、walker2d gravity、walker2d friction 三格 3/3 配对高于 concat；halfcheetah 两格最可能翻转或打平（无终止、密集奖励、5000 条目标数据下 IQL 价值学习更难，而源数据覆盖更有用）——写明这是把握最低的预测；BC 在 hopper / walker2d 格与 IQL target_only 差 ≤ 300，在 halfcheetah 格低于 IQL target_only。
+判据（逐格）：target_only 赢 = 3/3 配对 Δ > 0 且 |mean Δ| > 两臂 seed sd 的较大者；concat 赢对称；其余为平。归一化用 D4RL 各机器人的 REF_MIN/MAX，原始 return 与归一化并列，不跨格相加。
+判读：target_only 赢 ≥ 4/5 新格 → "固定混合协议在 medium 源 / 5000 目标设定下净收益为负"可写成跨环境的（限 0.5 档与已测实现）；halfcheetah 翻转 → 结论以环境条件（终止结构 / 覆盖）为条件，报出来不事后解释；全部打平 → Gate O2 的 hopper 结果是格特异的，主稿只能写 hopper。
+
+**执行顺序**：smoke（5 个任务：等价检查、BC nt500、λ = 1/8 nt1000、walker2d friction target_only、halfcheetah gravity bc，各 3000 步）通过后三批一起提交（9 + 24 + 45 = 78 run，defq 24 卡可用，每 run ≈ 50 min，预计 3–4 h）。
+
 ## 待做
 
 - [x] Experiment 1 多 seed（`toy/run_toy_seeds.sbatch`，按 seed 拆 array，每格 ~300 s CPU）
@@ -896,8 +915,7 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 - [x] Gate O2 六个基线 run：决策表第一行（target_only 1915 ± 130 vs concat 503 ± 65，concat = 文献 IQL）
 - [x] 训练强度对照 target_only 250k 步（job 202850）：1686 ± 145，仍 +1065…+1356 高于 concat
 - [x] 第一批：N_t 扫描 + BC（jobs 202868 / 202869）：交叉点在 1000–2000 之间，小 N_t 的 target_only 失败 = IQL critic 发散，BC(5000) ≈ IQL target_only
-- [ ] 第二批待批：BC 沿 N_t 轴（9 run）→ λ 扫描（N_t 5000 与 1000）→ 六格面板
-- [ ] 第二批：λ 扫描 + 六格面板；第三批：DARA（G_repair / G_reuse）
+- [ ] 第二批（已批，预注册见上）：BC 沿 N_t 轴 9 run + λ 扫描 24 run + 六格面板 45 run；第三批：DARA（G_repair / G_reuse）
 - [x] 原文协议核对：同 500K 步 / 128 + 128 / 同超参，两篇都无 target-only 基线用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
