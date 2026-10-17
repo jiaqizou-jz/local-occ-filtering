@@ -821,6 +821,8 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 3. **INFERENCE（待核）**：target_only 的 59.6 高于 LoDADA 表里这一格的所有方法（LoDADA 43.7、OTDF 35.2、IGDF 19.8、DARA 14.7、IQL 17.8）。如果原文协议与本协议可比（训练步数、batch、目标数据同为 5000 条 medium），那么这一格文献中所有"dynamics-aware"方法都没有恢复到纯目标数据的水平，"方法差距"实际上是"避免了多少 negative transfer"。要先核对：(a) 原文是否报 target-only 基线，(b) 训练步数 / batch 是否相同，(c) 本组 target_only 每步 256 条目标样本 vs concat 128 条的训练强度差异。
 4. 按评注，这一行的后续是先排除训练强度差异，再考虑一个已知方法或受控数据使用方式；不启动 score / 过滤器。
 
+**原文协议核对（arXiv HTML，2026-10-17，FACT）**：ODRL 论文附录 C：offline-offline 的 DARA / BOSA / IQL / TD3+BC 都是 500K 梯度步、源与目标 batch 各 128、两个 buffer 同时采样；LoDADA 附录：BOSA / IQL / DARA 500K 步、batch 128 + 128、IQL expectile 0.7、β 3.0、Adam 3e-4，LoDADA 自身 ξ = (90%, 80%, 70%)、K ∈ {30, 50}，五 seed，评估协议（最后 / 最好 / 平均）未在正文给出。**两篇都没有 target-only 基线**。所以本协议的 concat 与两篇的 IQL 同步数、同 batch、同超参（本仓库就是 ODRL 的实现），16.2 ± 2.0 复现 17.78 ± 6.85 不是巧合；target_only 59.6 ± 4.0 在文献里没有对应项，与表里 LoDADA 43.7 的比较只差评估协议这一个未知量（它们若报最优 checkpoint，只会让本组的 last-5 更保守）。
+
 **预注册：训练强度对照（启动前写下，job 见 `logs/gate_o_jobs.txt`）**。`target_only` 同协议只跑 250k 步（目标样本总数 = concat 500k 步的 128 × 500k，更新次数减半，eval 25 次，仍取最后 5 次均值）。这是保守对照：它只会让 target_only 变差。预测：last-5 target 1500–2100、仍逐 seed 高于 concat 的 414–568 ≥ 900；若 ≤ 700，则 concat 的劣势可能主要是目标项训练强度，negative transfer 的结论要收回。loss 系数差异（concat 里目标行只占梯度的一半）这个对照不覆盖，要单独说明。
 
 ## 待做
@@ -834,7 +836,8 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 - [x] 第四份评注：A 审计 / C 随机加回 / 修正 arm / 参考跑已读并写回；正对照失败 → 第三阶段不在 hopper friction 2.0 上做
 - [x] 干净子集复核（job 202843）：两项预测成立
 - [x] Gate O2 六个基线 run：决策表第一行（target_only 1915 ± 130 vs concat 503 ± 65，concat = 文献 IQL）
-- [ ] 训练强度对照 target_only 250k 步；核对 LoDADA / ODRL 原文协议（步数、batch、是否报 target-only）；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
+- [ ] 训练强度对照 target_only 250k 步（job 202850）
+- [x] 原文协议核对：同 500K 步 / 128 + 128 / 同超参，两篇都无 target-only 基线用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
