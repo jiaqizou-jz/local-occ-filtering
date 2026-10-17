@@ -718,6 +718,24 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 4. gap_data 与 gap_sim 的整体 Spearman 只有 0.73，但在未裁剪、非 terminal、两者都 > 0.01 的行上是 1.000（n 179861）；低值来自 48% 的行 gap_sim 恰为 0（空中相位，并列名次随机打破）和裁剪行。两套 50% mask 的 Jaccard 0.736；keep_sim 的 terminal 比例 0.0051（基础率 0.0041）、裁剪行比例 0.222（基础率 0.159）。
 5. 对 DARA-score hard filter 的 terminal 偏低（0.0013）现在有了更直接的解释：D_SAS 在 source 看到 1639 条 `s'` = reset 状态的行，目标 paired 集里没有这种 `s'`，所以这些行被判为强 source → 分数低 → 被删。
 
+**预注册对照结果（2026-10-16，jobs 202815 / 202817 / 202822 / 202823，全部 EXIT=0；最后 5 次 target eval 均值，held-out = `pairedheld`，目标回合长度 / 速度 = 保存的 actor 在目标环境 5 回合）**
+
+| arm | target（seed 0/1/2） | mean ± sd | source last-5 | held-out Q 均值（seed 0/1/2） | 目标回合长度 | vx | 预测 | 结果 |
+|---|---|---|---|---|---|---|---|---|
+| C `oracle_state_rand`（oracle_state + 1639 条随机被删 nonterminal） | 15.5 / 6.5 / 14.8 | 12.3 ± 4.1 | −0.5 / 8.1 / 3.3 | −3.2e4 / −4.9e4 / −1.0e4 | 12–53 | −0.47…−0.70 | 仍发散 | **✓** |
+| 修正 arm `oracle_state_sim`（−gap_sim，terminal 保留 62%） | 67.9 / 49.9 / 129.3 | 82.4 ± 34.0 | 161 / 267 / 529 | 1.0e4 / 7.4e2 / 3.7e4（min −10⁶） | 69–151 | −0.40…−0.02 | 不发散、≈ concat | **✗ 仍发散** |
+| 参考 concat（ODRL 真实目标 5000 条，原版 `iql`） | 294.3 / 294.6 / 302.5 | 297.1 ± 3.8 | 1826 / 2220 / 1684 | 203 / 203 / 203 | 127–129 | 1.32–1.35 | 250–340 | ✓ |
+| 参考 target_only（真实目标轨迹） | 335.0 / 334.9 / 334.9 | **334.9 ± 0.1** | 273 / 333 / 260 | 140 / 135 / 138 | 137–138 | 1.44 | 250–340 | ✓ |
+
+读法：
+
+1. **C 对照成立**：随机补回等量数据不改变任何东西（Q 仍 10⁴–10⁶、策略倒退 12–53 步摔倒），补 terminal 的部分恢复（job 202812）是特异的。
+2. **修正 arm 推翻了我上一段的机制解释**。用重模拟的真实 gap 以后 terminal 保留 62%（高于基础率），IQL 仍然发散（3/3 seed held-out Q 量级 10³–10⁵、min −10⁶，策略向后移动）。所以 **"terminal 系统性删除是发散主因"不成立**：terminal 被删是 D4RL 语义的人为效应，但不是发散的原因；强制补回全部 terminal（202812）只部分恢复，也与此一致。目前能稳住的说法只有：按一步动态 gap 硬保留最小的 50%（无论 gap 来自数据数组还是重模拟）在 hopper medium-replay 上 3 个变体 × 3 seed 全部让 IQL 发散，而随机 50% 和 Bellman-gap 50% 不发散。48.2% 的行真实 gap 恰为 0（空中相位），"保留最小 50%" 事实上 = "只保留摩擦无关的 transition"，被删的是全部接触相位。INFERENCE（未检验）：缺少接触相位的 transition 后，bootstrap 经过的落地状态没有自己的 transition，之前用最近邻距离做的闭包检查（p90 0.22）分辨率不够（没有分开位置和速度）。机制留作开放问题，不再在这一格上追。
+3. **参考跑给出这一格的天花板**：真实目标轨迹 target_only 的 return 334.9 ± 0.1 = 数据本身的 335（学回了行为策略，138 步摔倒，vx 1.44）；参考 concat 297 ≈ paired concat 289。没有任何配置超过行为数据，与文献（全部方法 10.15–10.52）一致。正对照不存在 → 按评注，这个装置不能用来裁决细微的 filtering 收益，第三阶段（DARA 原形式 vs hard filter）不在这一格上做。
+4. 次终点 Bellman 残差：参考 concat 3.1–3.3、参考 target_only 15–18（在 paired held-out 上，它只见过 5000 条真实轨迹）；发散 arm 10²–10³，无信息。
+
+**Gate O 最终表述**：未达预注册收益判据；本装置（paired 目标、全局 50% hard-selection、ODRL-IQL、hopper friction 2.0）没有正对照，天花板 = 行为策略，不能作为 dynamics-aware data reuse 无效的证据。可保留的、被复现的负结果只有一条：**按一步动态 gap 硬保留低 gap 半集会毁掉 IQL**（3 变体 × 3 seed），而且一步 gap 对数据选择的分辨率有限（48% 恰为 0）。要测 dynamics-aware data reuse 的决策价值，得换一个有正对照的 benchmark 格（目标数据示范成功、文献方法间有差距），这是用户的决定。
+
 **结论改写（按评注第十节，替代 "Gate O 结果 A → 方法线关闭" 的强版本）**
 
 > Gate O 未达到预注册的收益判据。该结果只适用于当前 paired-target、全局 50% hard-selection、ODRL-IQL（MSE actor、无 reward normalization）协议，且这一 benchmark 格的目标数据本身只示范摔倒、文献中所有方法都在 10.2–10.5。由于 terminal 行的 `s'` 语义问题、参考价值 V_t 未校准、所有稳定组目标控制均差、以及没有任何正对照，**本实验不能作为 dynamics-aware data reuse 无效的证据**。
@@ -734,7 +752,8 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 - [x] Gate R（`odrl/resolution.py`，K / h / feature 扫描）、Gate 2 + Gate S（`odrl/detectability.py`）、1b 复现 seed 3–5
 - [x] halfcheetah Gate R / S / P（h = 1）；perfect-support 目标（`paired_<g>`）；friction 轴 Gate R + paired；Δs 聚类；N_t 扫描；归一化估计器 + 确认跑；20000 步消融
 - [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：未达判据；oracle_state 的 terminal 全删是 D4RL `qlearning_dataset` 语义的人为效应（第四份评注审计），不是物理 gap 的性质
-- [ ] 第四份评注：读 A 审计 / C 随机加回 / 修正 arm / 参考跑的结果并写回；第三阶段（DARA 原形式 reward correction vs hard filter）只在前两阶段通过后做
+- [x] 第四份评注：A 审计 / C 随机加回 / 修正 arm / 参考跑已读并写回；正对照失败 → 第三阶段不在 hopper friction 2.0 上做
+- [ ] 若要继续 Gate O：选一个有正对照的 benchmark 格（目标数据示范成功、文献方法间有差距）；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
