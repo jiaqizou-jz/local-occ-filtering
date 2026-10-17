@@ -800,6 +800,29 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 
 **决策表（评注）**：target_only 稳、concat 退化 → 排除训练强度差异后才考虑一个已知方法或受控数据使用方式；两组稳且相近 → learner 正常、无明显 source 使用问题、不急于加过滤器；concat 明显优于 target_only → source 已有帮助，后续方法必须保住这部分收益；两组都远低于目标示范 → 先定位基线问题，不训练 score。跑出基线差距也不恢复 cluster 方法的地位。
 
+**Gate O2 结果（2026-10-17，jobs 202844 concat / 202845 target_only，6/6 EXIT=0；首发 202837/202838 因 sbatch 变量 `ENV` 与 module 系统冲突即时失败、无训练）**
+
+| 组 | seed | target last-5 | 归一化 | source last-5 | 目标回合长度 | 回放 return | vx | Q 均值 / max（目标数据） |
+|---|---|---|---|---|---|---|---|---|
+| target_only | 0 | 2095.4 | 65.1 | 618 | 616 | 2246 | 2.64 | 330 / 409 |
+| target_only | 1 | 1795.2 | 55.9 | 814 | 526 | 1773 | 2.36 | 329 / 408 |
+| target_only | 2 | 1855.7 | 57.7 | 549 | 576 | 2043 | 2.55 | 330 / 409 |
+| concat | 0 | 567.9 | 18.2 | 1422 | 180 | 364 | 1.02 | 332 / 408 |
+| concat | 1 | 414.1 | 13.5 | 1865 | 239 | 575 | 1.30 | 331 / 407 |
+| concat | 2 | 526.8 | 17.0 | 1392 | 282 | 759 | 1.51 | 332 / 409 |
+
+target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 65.0（16.2 ± 2.0）；逐 seed 差 target_only − concat = +1527 / +1381 / +1329。Q / V 两组都有界（330 ± 1，max 409），没有发散。
+
+对预注册：target_only 预测 1200–2600、sd > 300 → 实际 1915 ± 130（范围对、方差比预测小）；concat 预测 400–1200、与文献 17.78 同量级 → 实际 503 ± 65、归一化 16.2 ± 2.0，**与 LoDADA Table 1 的 IQL（混合数据）17.78 ± 6.85 在噪声内一致**；逐 seed target_only > concat → 落在评注决策表**第一行**。
+
+读法：
+1. **装置有正对照了**：这一格的 learner 能从 5000 条真实目标轨迹学到持续跳跃（526–616 步、vx 2.4–2.6、回放 return 1773–2246，接近数据的 1785–2885），且 concat 复现了文献的 IQL 基线。
+2. **加入 1M 条源 medium 数据让 target return 掉 1300–1500（−72%）**，回合长度从 ~570 步掉到 180–280 步，速度从 2.5 掉到 1.0–1.5；源侧 return 反而 1392–1865。这是真实、可复现（3/3 seed）的混合数据问题。
+3. **INFERENCE（待核）**：target_only 的 59.6 高于 LoDADA 表里这一格的所有方法（LoDADA 43.7、OTDF 35.2、IGDF 19.8、DARA 14.7、IQL 17.8）。如果原文协议与本协议可比（训练步数、batch、目标数据同为 5000 条 medium），那么这一格文献中所有"dynamics-aware"方法都没有恢复到纯目标数据的水平，"方法差距"实际上是"避免了多少 negative transfer"。要先核对：(a) 原文是否报 target-only 基线，(b) 训练步数 / batch 是否相同，(c) 本组 target_only 每步 256 条目标样本 vs concat 128 条的训练强度差异。
+4. 按评注，这一行的后续是先排除训练强度差异，再考虑一个已知方法或受控数据使用方式；不启动 score / 过滤器。
+
+**预注册：训练强度对照（启动前写下，job 见 `logs/gate_o_jobs.txt`）**。`target_only` 同协议只跑 250k 步（目标样本总数 = concat 500k 步的 128 × 500k，更新次数减半，eval 25 次，仍取最后 5 次均值）。这是保守对照：它只会让 target_only 变差。预测：last-5 target 1500–2100、仍逐 seed 高于 concat 的 414–568 ≥ 900；若 ≤ 700，则 concat 的劣势可能主要是目标项训练强度，negative transfer 的结论要收回。loss 系数差异（concat 里目标行只占梯度的一半）这个对照不覆盖，要单独说明。
+
 ## 待做
 
 - [x] Experiment 1 多 seed（`toy/run_toy_seeds.sbatch`，按 seed 拆 array，每格 ~300 s CPU）
@@ -810,7 +833,8 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 - [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：未达判据；oracle_state 的 terminal 全删是 D4RL `qlearning_dataset` 语义的人为效应（第四份评注审计），不是物理 gap 的性质
 - [x] 第四份评注：A 审计 / C 随机加回 / 修正 arm / 参考跑已读并写回；正对照失败 → 第三阶段不在 hopper friction 2.0 上做
 - [x] 干净子集复核（job 202843）：两项预测成立
-- [ ] Gate O2 六个基线 run（首发因 sbatch 变量 ENV 与 module 系统冲突全部即时失败、无训练；改名 TASK_ENV 后重发）；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
+- [x] Gate O2 六个基线 run：决策表第一行（target_only 1915 ± 130 vs concat 503 ± 65，concat = 文献 IQL）
+- [ ] 训练强度对照 target_only 250k 步；核对 LoDADA / ODRL 原文协议（步数、batch、是否报 target-only）；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
