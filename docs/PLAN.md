@@ -837,6 +837,25 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 
 **Gate O2 定论**：在 hopper gravity 0.5 medium 这一格，加入 1M 条源 medium 数据对 ODRL-IQL 是净有害的（−72% target return，3/3 seed，不由目标采样强度解释），concat 复现文献 IQL 基线，纯目标 5000 条高于文献所有方法。这一轮到此为止，不启动 score / 过滤器。下一步由用户决定：(a) 跨格跑 target-only 基线（判断"源数据净有害、方法只部分恢复"是特例还是系统性现象，第四类范式候选主张）；(b) 在本格做一个受控数据使用方式（如 DARA 原形式 reward correction，128 + 128 同协议）看能否保住 target-only 水平；(c) 梯度权重对照（concat 中目标项权重 ×2）补上 loss 系数这一项。
 
+## 第六份评注：第一批 = N_t 扫描 + target BC（预注册，2026-10-17，启动前写下）
+
+**评注的三项纠正，照单接受并记录**：(1) "诊断部分成立"不等于它解释了 Gate O2 的下降——Gate O2 的 concat 根本没用 domain classifier，两条线分开写，主稿围绕 target-only / 净复用收益 / 数据条件，原诊断结果另整理为技术报告，只有出现直接连接实验才并入；(2) 现有 `oracle_bellman` 不是 VGDF 的上界：VGDF 是 NeurIPS 2023（不是 ICML），主设定 online target，用 dynamics ensemble 的配对后继做价值分布相近度筛选、价值与模型动态更新，而我们是一次固定的、未校准的 V_t 做全局 50% 硬筛，只能叫 privileged diagnostic；另有 DVDF（arXiv 2512.02435）已在 fully offline 下做 dynamics + value 联合筛选，"物理相似性不够要看价值"不是新主张；(3) 候选权重含 λ = 0 不保证选出的策略满足 G_reuse ≥ 0，安全性在选择而非在"保留 baseline 选项"，Bellman 残差选 λ 没有保证，不提前称"安全复用"。三个不能写的过强结论：方法部分"普遍"不成立（只限已测实现与设置）；"已有两篇论文"（两组成熟度不同的证据）；"含零权重即安全"。
+
+**核心问题（定稿版）**：在有限 target 数据已经能提供有用行为时，source 复用的收益是否足以抵消它引入的学习偏差？哪些数据条件和使用方式决定这个权衡？允许正迁移、负迁移或混合结果。
+
+**第一批设计**（`odrl/run_nt_sweep.sbatch`，`score_iql` 新增 `target_subset` / `subset_seed` / `bc`）：
+- *N_t 扫描*：hopper gravity 0.5 medium，源 d4rl hopper-medium-v2，目标 = ODRL 5000 条经 `call_tar_dataset` 转换后的 4999 个完整 transition tuple（s′ / not_done 保持 ODRL 语义，不从相邻行重建）；每个 seed 一个固定随机排列，取前 N_t 个 → 嵌套无放回子集 D_500 ⊂ D_1000 ⊂ D_2000 ⊂ D_5000；N_t ∈ {500, 1000, 2000}（5000 点复用 Gate O2 的六个 run，协议一致：concat 原版 iql ≡ score_iql source = concat）；target_only 与 concat 共享同一子集与训练 seed（三组"子集种子—训练种子"配对，重复同时含子集与优化变化）；其余协议不变（500k 步、128 + 128、last-5 均值）。命名：对现有轨迹池随机稀疏采样的数据量曲线，不等于"只允许连续采集 N 步"。不做 20000（没有独立的额外目标数据，有放回重采不算）。
+- *target BC*：同一格、全部 5000 条、3 seed，同一 actor 架构与动作 MSE，优势权重置 1（Q / V 照常训练但 actor 不用），每步 256 条目标样本（与 target_only 相同）。
+- 18 个新增 IQL run + 3 个 BC run；先 smoke（N_t 500 target_only 与 BC 各 3000 步，核对打印的 buffer 大小）再提交。
+
+**不做**：20000 点、比例网格、DARA、cluster、Bellman oracle；不宣布 benchmark 失效。
+
+**预测**（我的）：target_only 随 N_t 下降：2000 → 1400–1900，1000 → 900–1600，500 → 500–1300（spread 大）；concat 在所有 N_t 上基本平坦 350–650（源数据主导）；Δ = target_only − concat 在 2000 与 1000 上 3/3 配对为正，在 500 上 ≥ 2/3 为正但可能与噪声重叠；已测范围内无交叉点（曲线可能非单调，交叉点不是必然结构）。BC(5000) 1500–2200，与 IQL target_only 相差 ≤ 300 → 落在"BC 接近 IQL target-only"分支（7 条近同质轨迹上 IQL ≈ 加权 BC）。
+
+**预注册解释表（评注第十节，原文照录）**：小 N_t 时 concat 更好、大 N_t 时 target-only 更好 → 默认复用存在数据量相关的有效范围；所有 N_t 下 concat 更差 → 该固定混合协议在已测范围无净收益（不能说 source 没价值）；适配方法优于 concat 但低于 target-only → 修复了损害、未展示净复用收益；结果强烈依赖子集或 learner → 结论要以数据组成或算法为条件。BC：接近 IQL → 目标数据已提供强可模仿行为，重点转到"混合监督为什么破坏它"；明显弱于 IQL → 价值学习有贡献；高于 IQL → 当前 target-only 不是最强简单参照。报告：逐任务、逐配对 Δ_j，原始 return 与归一化差并列，不跨环境相加，不把一个 run 的评估回合当独立重复，探索与确认分开。
+
+**第二批（本批结束后再定）**：按预先规则选一个 N_t 做相对损失权重扫描 L_λ = (1−λ) L̄_t + λ L̄_s，λ ∈ {0, 1/8, 1/4, 1/2}，Q / V / actor 共用一个 λ；六格面板 {Hopper, HalfCheetah, Walker2d} × {gravity 0.5, friction 0.5}（ODRL locomotion 还有 Ant，六格是三环境子面板），每格本地 target-only、concat（BC 强则纳入）。第三批：匹配协议的 DARA（ODRL 原实现，固定版本），报 G_repair 与 G_reuse。
+
 ## 待做
 
 - [x] Experiment 1 多 seed（`toy/run_toy_seeds.sbatch`，按 seed 拆 array，每格 ~300 s CPU）
@@ -849,7 +868,8 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 - [x] 干净子集复核（job 202843）：两项预测成立
 - [x] Gate O2 六个基线 run：决策表第一行（target_only 1915 ± 130 vs concat 503 ± 65，concat = 文献 IQL）
 - [x] 训练强度对照 target_only 250k 步（job 202850）：1686 ± 145，仍 +1065…+1356 高于 concat
-- [ ] 用户决定：跨格 target-only 基线 / 本格受控数据使用方式 / 梯度权重对照
+- [ ] 第一批：N_t 扫描 18 run + BC 3 run（smoke 后提交，job 见 `logs/gate_o_jobs.txt`）
+- [ ] 第二批：λ 扫描 + 六格面板；第三批：DARA（G_repair / G_reuse）
 - [x] 原文协议核对：同 500K 步 / 128 + 128 / 同超参，两篇都无 target-only 基线用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一

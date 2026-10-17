@@ -32,11 +32,19 @@ class ScoreIQL(IQL):
         self.keep_fraction = config.get('keep_fraction', 0.5)
         self.score_file = config.get('score_file')
         self.target_file = config.get('target_file')
+        self.target_subset = config.get('target_subset')     # n_t sweep: keep this many target transitions
+        self.subset_seed = config.get('subset_seed', 0)      # one fixed permutation per seed -> nested subsets d_500 c d_1000 c d_2000 c d_5000
+        self.bc = config.get('bc', False)                    # actor = plain action mse (advantage weight 1); q / v still trained but unused by the actor
         self.prepared = False
 
     def prepare(self, src_replay_buffer, tar_replay_buffer, writer = None):
         if self.target_file:
             set_buffer(tar_replay_buffer, load_target(self.target_file))
+
+        if self.target_subset:
+            # index complete transition tuples of the loaded buffer: s' / not_done keep odrl's semantics, nothing is rebuilt from neighbours
+            idx = np.random.default_rng(self.subset_seed).permutation(tar_replay_buffer.size)[:self.target_subset]
+            set_buffer(tar_replay_buffer, tuple(v[idx] for v in arrays_of(tar_replay_buffer)))
 
         if self.source == 'target_only':
             set_buffer(src_replay_buffer, arrays_of(tar_replay_buffer))
@@ -46,10 +54,15 @@ class ScoreIQL(IQL):
             keep = score >= np.quantile(score, 1. - self.keep_fraction)
             set_buffer(src_replay_buffer, tuple(v[keep] for v in arrays_of(src_replay_buffer)))
 
-        print(f'source {self.source}: {src_replay_buffer.size} transitions, target {tar_replay_buffer.size}', flush = True)
+        print(f'source {self.source}: {src_replay_buffer.size} transitions, target {tar_replay_buffer.size}' + (f' (subset seed {self.subset_seed})' if self.target_subset else '') + (', actor bc (advantage weight 1)' if self.bc else ''), flush = True)
         if writer is not None:
             writer.add_scalar('filter/source kept', src_replay_buffer.size, 0)
         self.prepared = True
+
+    def update_policy(self, advantage_batch, state_batch, action_batch):
+        if not self.bc:
+            return super().update_policy(advantage_batch, state_batch, action_batch)
+        return self.policy.bc_loss(state_batch, action_batch).mean()
 
     def train(self, src_replay_buffer, tar_replay_buffer, batch_size = 128, writer = None):
         if not self.prepared:
