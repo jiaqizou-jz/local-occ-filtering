@@ -656,6 +656,16 @@ N_t      g_coarse − null (nats)     g_full − null       rho_dara            
 
 oracle_state 与 oracle_bellman 的 mask Jaccard 0.81，差别最显眼的是 terminal：state gap 过滤把全部 1639 条终止 transition 都丢了（摔倒是重接触、gap 大），oracle_bellman 反而保留 2 倍。闭包（kept s′ 是否落在 kept s 附近）对 source 过滤不是机制（oracle_state 的 p90 比 random 还好）；target_only 的闭包确实坏（transition 级集合，s′ 从不在样本内），它的发散符合 off-support bootstrapping。**INFERENCE**：按动态 gap 硬过滤系统性删除终止 transition，IQL 在这份数据上随之发散。机制检验已提交（job 202812，3 seed）：`oracle_state_term` = oracle_state 分数但 terminal 强制保留（多 0.4% 数据，与 oracle_state mask 重叠 199160/200799）。预注册：若不再发散（Q 均值 0–300、source return > 1000）且 target return ≈ concat / random → state oracle 的失败是 terminal 删除的人为效应，结果仍是 A；若仍发散 → 机制在 kept 半集的其它组成差异，结果也仍是 A。
 
+**机制检验结果（2026-10-16，job 202812，`oracle_state_term` = oracle_state 分数 + 1639 条 terminal 强制保留，3 seed）**
+
+| seed | target last-5 | source last-5 范围 | held-out Bellman 残差 | held-out Q min / mean / max |
+|---|---|---|---|---|
+| 0 | 60.1 | 24–68 | 3.20 | −232 / 60 / 234 |
+| 1 | 174.8 | 814–1001 | 1.74 | −114 / 100 / 243 |
+| 2 | 334.0 | 699–965 | 26.3 | −10271 / −27 / 710 |
+
+target 均值 189.6 ± 112.3（oracle_state 67.9 ± 39.4、concat 289.0、random 254.2）。对照预注册判据：Q 均值落在 0–300 的 2/3 seed（seed 2 均值 −27、min −10⁴，仍有局部发散）；source return > 1000 的 0/3（seed 1、2 在 700–1000，seed 0 塌到 24–68）；target ≈ concat / random 只有 seed 2。读法：放回 0.4% 的 terminal 让 Q/V 量级从 10⁴–10⁵ 回到 10²、让 2/3 seed 的 source 策略恢复到 medium-replay 水平的三分之一，所以 **terminal 删除是发散量级的主因，但不是全部**：state-gap 过滤剩下的那一半（gap 均值 0.006，偏向无接触 / 高速相位）即使补回 terminal，对 IQL 仍是比 random 半集差得多的训练集（source 46–915 vs random 2200–3100）。判断不变：结果 A；"gap 硬过滤有害"的机制 = terminal 系统性删除 + kept 半集组成偏斜，两者来自同一个事实——摩擦敏感的 transition 正是接触 / 摔倒相位，按动态差异过滤等于把落地和摔倒从数据里删掉。
+
 **判断**：方法线维持关闭。对诊断线新增第四条：在 ODRL hopper friction 2.0 perfect-support 设定上，oracle 级别的动态 gap 过滤没有决策价值（Bellman oracle ≈ concat ≈ random），而且 gap 硬过滤（oracle 或 DARA）在 keep 0.5 下不是无益而是有害（Q 发散），机制候选是终止 transition 被系统性删除。限制：主终点动态范围 94–191 步；要做一个有检出力的 Gate O 需要换设定（轨迹级目标数据、更多目标数据或更轻的 shift），这是范围变更，由用户决定。keep 0.25 / 0.75 敏感性按评注只在出现趋势时做，没有趋势，不做。
 
 ## 待做
@@ -665,7 +675,7 @@ oracle_state 与 oracle_bellman 的 mask Jaccard 0.81，差别最显眼的是 te
 - [x] ODRL 侧：`odrl/`（数据、probe-state 真值、Exp 2/3 评估），hopper 数据已在 `dataset/mujoco/`
 - [x] Gate R（`odrl/resolution.py`，K / h / feature 扫描）、Gate 2 + Gate S（`odrl/detectability.py`）、1b 复现 seed 3–5
 - [x] halfcheetah Gate R / S / P（h = 1）；perfect-support 目标（`paired_<g>`）；friction 轴 Gate R + paired；Δs 聚类；N_t 扫描；归一化估计器 + 确认跑；20000 步消融
-- [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：结果 A，见上；机制检验 job 202812 待读
+- [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：结果 A；机制检验 job 202812 已读（terminal 删除是主因非全部）
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
