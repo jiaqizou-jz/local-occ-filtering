@@ -103,7 +103,22 @@ def cross_fit(train, held, tar, *, num_clusters, steps, seed, device, folds = 5,
         rows.append((g[0], g[1], g_s[1], g[2], g_s[2], g[3], g_s[3], g_fit[1], g_fit[2]))
     return np.mean(rows, 0)
 
-def support_rows(name, scores, gap, replica = None, taus = TAUS):
+def valid_rows(prefix, held, src_env, *, seed, num_held):
+    # fifth note: evaluation rows whose state is recoverable from the observation and whose data s' is a physical successor:
+    # no velocity component at the +-10 observation clip (in s or s'), and not a terminal row (qlearning_dataset's s' there is the next reset).
+    # evaluation-side screening only; training data is never filtered by this
+    import gym, d4rl
+    term = d4rl.qlearning_dataset(gym.make(f'{prefix}-medium-replay-v2'))['terminals'].astype(bool)
+    idx = np.random.default_rng(seed).permutation(len(term))[:num_held]   # the held chunk of odrl.datasets.split
+    v0 = held.state.shape[-1] - src_env.unwrapped.model.nv
+    clipped = (np.abs(held.state[:, v0:]) >= 10 - 1e-6).any(-1) | (np.abs(held.next_state[:, v0:]) >= 10 - 1e-6).any(-1)
+    return ~clipped & ~term[idx]
+
+def support_rows(name, scores, gap, replica = None, taus = TAUS, valid = None):
+    if valid is not None:
+        # same rows, same scale, every estimator: the clean-subset replica of the table, tagged <case>/clean
+        sub = lambda d: None if d is None else {k: v[valid] for k, v in d.items()}
+        return [dict(r, valid = valid.mean()) for r in support_rows(name + '/clean', sub(scores), gap[valid], sub(replica), taus)]
     e = 1. / (1. + np.exp(-scores['occ']))
     rows = []
     for tau in taus:
@@ -120,7 +135,7 @@ def support_rows(name, scores, gap, replica = None, taus = TAUS):
         rows.append(r)
     return rows
 
-def evaluate_case(name, *, prefix = 'hopper', axis = 'gravity', num_clusters = 10, steps = 3000, num_target = 5000, num_held = 50_000, seed = 0, device = DEVICE, gate_p = True, replicate = False, cluster_on = 'next'):
+def evaluate_case(name, *, prefix = 'hopper', axis = 'gravity', num_clusters = 10, steps = 3000, num_target = 5000, num_held = 50_000, seed = 0, device = DEVICE, gate_p = True, replicate = False, cluster_on = 'next', clean = False):
     train, held, null = split(load_d4rl(f'{prefix}-medium-replay-v2'), num_held = num_held, num_null = num_target, seed = seed)
     tar, tar_env = load_target(name, null, num_target = num_target, seed = seed, prefix = prefix, axis = axis)
     src_env = make_source_env(f'{prefix}-{axis}')
@@ -148,7 +163,10 @@ def evaluate_case(name, *, prefix = 'hopper', axis = 'gravity', num_clusters = 1
     scores = scores_of(seed)
     replica = scores_of(seed + 1000) if replicate else None   # same data, same clusters, independent fit
     gap, _ = dynamics_gap(src_env, tar_env if tar_env is not None else src_env, held.state, held.action, scale = scale)
-    return dict(zip(GAIN_KEYS, gain)), support_rows(name, scores, gap, replica)
+    rows = support_rows(name, scores, gap, replica)
+    if clean:
+        rows += support_rows(name, scores, gap, replica, valid = valid_rows(prefix, held, src_env, seed = seed, num_held = num_held))
+    return dict(zip(GAIN_KEYS, gain)), rows
 
 def run(cases = tuple(k for k in CASES if k != 'behavior_m' and not k.startswith('paired')), *, seeds = (0,), **kwargs):
     gain_rows, sup_rows = [], []
@@ -160,7 +178,7 @@ def run(cases = tuple(k for k in CASES if k != 'behavior_m' and not k.startswith
             sup_rows.extend(dict(seed = seed, **r) for r in sup)
             print(f'gain  {seed:<4}{name:<13}' + ''.join(f'{k} {v:>8.4f}  ' for k, v in gain.items()) + f'({time.time() - t0:.0f}s)', flush = True)
             for r in sup:
-                print(f'supp  {seed:<4}{name:<13}tau {r["tau"]:<5}frac {r["frac"]:.3f}  ' + ''.join(f'{k} {r[k]:>8.3f}  ' for k in r if k.startswith(('abs_', 'cabs_', 'rho_', 'mean_', 'rep_'))), flush = True)
+                print(f'supp  {seed:<4}{r["case"]:<19}tau {r["tau"]:<5}frac {r["frac"]:.3f}  ' + (f'valid {r["valid"]:.3f}  ' if 'valid' in r else '') + ''.join(f'{k} {r[k]:>8.3f}  ' for k in r if k.startswith(('abs_', 'cabs_', 'rho_', 'mean_', 'rep_'))), flush = True)
     return gain_rows, sup_rows
 
 if __name__ == '__main__':

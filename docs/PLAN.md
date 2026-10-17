@@ -756,6 +756,35 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 
 同时降调三处旧表述：次终点 Bellman 残差是模型自身的内部一致性 |r + γ(1−d)V_θ(s') − Q_θ|，不是对真值的误差，不能写成"Q 更贴近目标"；"290 只是生存步数"改为"return 主要受生存时间限制，同时受速度与控制代价影响，更晚摔倒是合法改善，必须同时报速度"；诊断线的 held-out CE 只是 H(D|Z) 的上界（CE = H + E KL），两个分类器的 CE 差还含各自拟合误差，报告时把"统计诊断"与"精确识别了信息量"分开。
 
+## 第五份评注：范围决定（2026-10-16）
+
+**决定**：封存 hopper friction 2.0 上的继续排障；先做已有 score 的干净子集复核（不加新训练的方法实验）；gravity 0.5 medium 只跑 `target_only` 与 `concat` 两个参考组 × 3 seed，不启动任何 score / 过滤器 / 方法实验。
+
+**三条线分开固定（替代任何"idea 成功 / 失败"总判决）**
+- *识别问题*：reverse conditional ≠ 纯 dynamics discrepancy，解析恒等式与完整状态 toy 反例成立。真实 Hopper 上的量化归因要加一条限制：观测把速度裁剪到 ±10，完整状态 x 没被观测 o 完整保留，p_d(o'|o,a) = ∫ p(o'|x,a) p_d(x|o,a) dx，同物理下不同采集行为也可能让观测条件分布不同；所以真实数据上"同物理假阳性"里可能同时混着 reverse conditioning 的 occupancy 差异、裁剪造成的隐藏状态混合差异、有限样本误差，不能全部归到 occupancy confounding。
+- *cluster 修正方法*：在已测设置中没有优于连续 conditional estimator 的证据，暂停扩展；N_t 扫描的负面证据要在干净子集上复核确认，不靠新的 RL 结果绕过。
+- *下游数据使用*：低一步 gap 的全局 50% 硬筛选在 friction 2.0 上严重破坏 IQL；这不是"正确识别 dynamics 没有价值"的证明，而是这种选择规则没有同时保护学习所需的数据结构（48% 行 gap 恰为 0 → 规则 ≈ 保留空中阶段、移除接触阶段；"减小单步模型偏差"与"保留完成任务所需的覆盖"冲突，这是对规则的解释，不是已证实的发散机制）。
+- 降调一处：真实目标轨迹 target_only = 334.9 ≈ 数据的 335 支持"当前数据与实现没有展示出超过行为水平的策略改善"，不能写成"这个数据集理论上只能到 335"。停止这一格的理由是资源分配（多个参考组都停在差的目标行为水平、文献无方法差距），不是上界证明。
+
+**干净子集复核（预注册，不加新 RL 训练；`odrl/detectability.py` 加评估行有效性掩码）**。有效行 = held-out source 行中，s 与 s' 的速度分量都没触到 ±10 裁剪边界，且不是 terminal（有有效物理后继）。分类器训练数据不变（同全样本），只筛评估行；所有方法用同一批有效行、同一归一化尺度；同时报全样本结果和有效行占比（预期约 84%）。这是评估样本的有效性筛查，不把这些行从任何训练集删除。复核两个结果：
+1. 同物理 behavior 对照（源 medium-replay vs 目标 expert-v2）的假阳性：LoDADA `rev` 带内 abs 7–8 nats、rep 0.93；`norm` / `local` / `dara` 的带内 cabs。预测：裁剪行占假阳性的一部分但不是全部——有效行上 abs_rev 仍 > 3 nats、rep_rev > 0.8；cabs_norm 仍高于 null 行（之前确认跑 1.33 vs 0.17）。若有效行上 abs_rev 掉到 < 1 nat，则真实数据上的 LoDADA 假阳性主要是裁剪造成的隐藏状态混合，归因要改写。
+2. friction 2.0 perfect-support、delta 聚类 K = 10 下 DARA 与 cluster score 的排序差距：rho_dara 0.66–0.70 vs rho_norm 0.20–0.27 / rho_local 0.17–0.23。有效行上真值 gap 才是原始样本的真值。预测：两者都上升（真值噪声减少），差距保持（rho_dara − rho_norm ≥ 0.3）；若差距收窄到 < 0.1，cluster 线的负面证据要重新评估。
+
+## Gate O2：hopper gravity 0.5 medium 基线（预注册，2026-10-16，启动前写下；新协议版本，不是"只换轴"）
+
+**目的**：确认在一个目标行为较好、文献中存在方法差距的任务上，当前 learner 能否稳定学习，以及加入 source 数据是否带来可重复的影响。不是再找一格让 cluster 方法赢。
+
+**协议**（`odrl/run_gate_o_reference.sbatch`，ENV / SHIFT / SRCTYPE 参数化）：源 = d4rl `hopper-medium-v2`（1M，原始物理；此前 Gate O 用的是 402k medium-replay + paired 目标，本协议单独标版本）；目标 = ODRL `hopper_gravity_0.5_medium.hdf5`（5000 行，7 个回合，回合长 505–815、return 1785–2885 中位 2397，vx 2.57；归一化参考 −26.3 / 3234.3，数据中位 ≈ 74 分）；ODRL IQL 原实现（MSE actor、lam 0.7、temp 3.0、无 reward normalization）500k 步，eval 每 10k 步 10 回合，不改任何超参。两组各 3 seed，共 6 run：
+- `target_only`：`score_iql` 的 `source = target_only`，每步 128 + 128 = **256 条目标样本**；
+- `concat`：原版 `iql`，每步 128 源 + 128 目标。
+公平性记录：总更新次数相同 ≠ 目标数据训练强度相同；若 concat 明显更差，先核对目标项采样次数与 loss 系数，再谈 negative transfer。
+
+**终点**：主 = 最后 5 次 target eval 均值（不事后挑 checkpoint），报逐 seed 差值，不把"均值差 > 某组 std"当显著性检验；辅 = 目标回合长度、前进速度、held-out Q/V 量级。文献参照：LoDADA Table 1 该格 IQL（**混合数据**）17.78 ± 6.85、DARA 14.68 ± 5.24、OTDF 35.22 ± 5.94、LoDADA 43.72 ± 9.72；17.78 是 concat 的参照，不是 target_only 的预期。
+
+**预测**（我的）：target_only 学到接近行为数据的策略，target return 1200–2600（归一化 38–81），seed 间 sd > 300，回合长度 400–1000；concat 被 1M 源数据主导，在半重力下 400–1200（13–38，与文献 17.78 ≈ 553 同量级），逐 seed 低于 target_only → 落在评注表的第一行（存在值得研究的混合数据问题，先排除训练强度差异）。Q/V 量级两组都有界（< 500）。
+
+**决策表（评注）**：target_only 稳、concat 退化 → 排除训练强度差异后才考虑一个已知方法或受控数据使用方式；两组稳且相近 → learner 正常、无明显 source 使用问题、不急于加过滤器；concat 明显优于 target_only → source 已有帮助，后续方法必须保住这部分收益；两组都远低于目标示范 → 先定位基线问题，不训练 score。跑出基线差距也不恢复 cluster 方法的地位。
+
 ## 待做
 
 - [x] Experiment 1 多 seed（`toy/run_toy_seeds.sbatch`，按 seed 拆 array，每格 ~300 s CPU）
@@ -765,7 +794,7 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 - [x] halfcheetah Gate R / S / P（h = 1）；perfect-support 目标（`paired_<g>`）；friction 轴 Gate R + paired；Δs 聚类；N_t 扫描；归一化估计器 + 确认跑；20000 步消融
 - [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：未达判据；oracle_state 的 terminal 全删是 D4RL `qlearning_dataset` 语义的人为效应（第四份评注审计），不是物理 gap 的性质
 - [x] 第四份评注：A 审计 / C 随机加回 / 修正 arm / 参考跑已读并写回；正对照失败 → 第三阶段不在 hopper friction 2.0 上做
-- [ ] 若要继续 Gate O：首选 hopper gravity 0.5 medium（见"换格的依据"），先跑参考 target_only / concat 确认有适配空间；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
+- [ ] Gate O2 六个基线 run（已提交，见下）；干净子集复核；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
