@@ -770,6 +770,21 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 1. 同物理 behavior 对照（源 medium-replay vs 目标 expert-v2）的假阳性：LoDADA `rev` 带内 abs 7–8 nats、rep 0.93；`norm` / `local` / `dara` 的带内 cabs。预测：裁剪行占假阳性的一部分但不是全部——有效行上 abs_rev 仍 > 3 nats、rep_rev > 0.8；cabs_norm 仍高于 null 行（之前确认跑 1.33 vs 0.17）。若有效行上 abs_rev 掉到 < 1 nat，则真实数据上的 LoDADA 假阳性主要是裁剪造成的隐藏状态混合，归因要改写。
 2. friction 2.0 perfect-support、delta 聚类 K = 10 下 DARA 与 cluster score 的排序差距：rho_dara 0.66–0.70 vs rho_norm 0.20–0.27 / rho_local 0.17–0.23。有效行上真值 gap 才是原始样本的真值。预测：两者都上升（真值噪声减少），差距保持（rho_dara − rho_norm ≥ 0.3）；若差距收窄到 < 0.1，cluster 线的负面证据要重新评估。
 
+**干净子集复核结果（job 202843，2026-10-17；有效行占 held-out 的 83.5–83.7%；带内 τ = 0.1，全样本 → 有效行，seed 0/1/2）**
+
+| 量 | 全样本 | 有效行 | 预测 | 结果 |
+|---|---|---|---|---|
+| behavior abs_rev（LoDADA 同物理假阳性，nats） | 8.51 / 7.02 / 7.67 | 8.32 / 6.73 / 7.05 | > 3 | ✓ |
+| behavior rep_rev（两次独立拟合的 Spearman） | 0.930 / 0.928 / 0.922 | 0.934 / 0.922 / 0.920 | > 0.8 | ✓ |
+| behavior cabs_norm | 1.50 / 1.06 / 1.51 | 1.49 / 1.06 / 1.29 | > null 0.17 | ✓ |
+| behavior cabs_dara / cabs_local | 1.44 / 1.09 / 1.22 ；1.05 / 0.86 / 0.98 | 1.35 / 1.04 / 1.14 ；1.03 / 0.82 / 0.91 | – | 几乎不变 |
+| paired friction 2.0 rho_dara（delta K = 10） | 0.666 / 0.663 / 0.703 | **0.727 / 0.707 / 0.759** | 上升 | ✓ |
+| paired friction 2.0 rho_norm | 0.203 / 0.269 / 0.254 | 0.216 / 0.285 / 0.278 | 上升 | ✓ |
+| paired friction 2.0 rho_local | 0.172 / 0.194 / 0.232 | 0.198 / 0.211 / 0.255 | 上升 | ✓ |
+| rho_dara − rho_norm | 0.46 / 0.39 / 0.45 | 0.51 / 0.42 / 0.48 | ≥ 0.3 | ✓ |
+
+读法：(1) 观测裁剪行不是真实数据上 LoDADA 假阳性的来源——去掉它们后 abs_rev 只降 2–8%，可复现性不变；真实 Hopper 上同物理假阳性的归因限制（隐藏状态混合）仍然要写，但量上不改变结论。(2) 在真值有效的行上，DARA 的排序更好、cluster 估计器略好，差距反而略增；cluster 线"不优于连续 conditional estimator"的负面证据在干净子集上成立。全样本结果同时保留。(3) 这是评估行筛查，没有删除任何训练行。
+
 ## Gate O2：hopper gravity 0.5 medium 基线（预注册，2026-10-16，启动前写下；新协议版本，不是"只换轴"）
 
 **目的**：确认在一个目标行为较好、文献中存在方法差距的任务上，当前 learner 能否稳定学习，以及加入 source 数据是否带来可重复的影响。不是再找一格让 cluster 方法赢。
@@ -794,7 +809,8 @@ reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪
 - [x] halfcheetah Gate R / S / P（h = 1）；perfect-support 目标（`paired_<g>`）；friction 轴 Gate R + paired；Δs 聚类；N_t 扫描；归一化估计器 + 确认跑；20000 步消融
 - [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：未达判据；oracle_state 的 terminal 全删是 D4RL `qlearning_dataset` 语义的人为效应（第四份评注审计），不是物理 gap 的性质
 - [x] 第四份评注：A 审计 / C 随机加回 / 修正 arm / 参考跑已读并写回；正对照失败 → 第三阶段不在 hopper friction 2.0 上做
-- [ ] Gate O2 六个基线 run（已提交，见下）；干净子集复核；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
+- [x] 干净子集复核（job 202843）：两项预测成立
+- [ ] Gate O2 六个基线 run（首发因 sbatch 变量 ENV 与 module 系统冲突全部即时失败、无训练；改名 TASK_ENV 后重发）；用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
