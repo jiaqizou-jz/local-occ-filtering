@@ -902,6 +902,59 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 
 **执行顺序**：smoke（5 个任务：等价检查、BC nt500、λ = 1/8 nt1000、walker2d friction target_only、halfcheetah gravity bc，各 3000 步）通过后三批一起提交（9 + 24 + 45 = 78 run，defq 24 卡可用，每 run ≈ 50 min，预计 3–4 h）。
 
+### 第二批结果（2026-10-17，jobs 202913 / 202914 / 202915，78/78 EXIT=0；汇总 `odrl/batch2_summary.py`，job 203007）
+
+**(1) BC 沿 N_t（hopper gravity 0.5，与 IQL 两臂同一嵌套子集）**
+
+| N_t | BC（seed 0/1/2） | mean ± sd | IQL target_only | concat | BC − target_only | BC − concat |
+|---|---|---|---|---|---|---|
+| 500 | 332 / 193 / 191 | 239 ± 66 | 191 ± 10 | 488 ± 117 | +150 / −12 / +7 | −42 / −455 / −249 |
+| 1000 | 175 / 532 / 475 | 394 ± 157 | 513 ± 404 | 431 ± 25 | −6 / −550 / +200 | −243 / +66 / +65 |
+| 2000 | 525 / 880 / 1022 | 809 ± 209 | 1186 ± 190 | 432 ± 44 | −907 / −275 / +52 | +153 / +404 / +573 |
+| 5000 | 1982 / 1307 / 1871 | 1720 ± 295 | 1915 ± 130 | 503 ± 65 | −114 / −488 / +15 | +1414 / +893 / +1344 |
+
+辅助量：BC(500) seed 1、2 回合 105–107 步 / vx 0.82，与 IQL target_only(500) 的 101–111 步 / vx 0.8 是同一种塌法；seed 0 156 步 / 1.23。BC(1000) 99 / 202 / 192 步；BC(2000) 191 / 265 / 310 步、vx 1.43–1.86。（BC 的 Q / V 与同 seed 的 target_only 用同样的批次训练、actor 不影响 critic，所以 Q 列在确定性的 run 上逐位相同——不是 bug。）
+
+对预注册：BC(500) 300–900 ✗（239）；BC(500) 3/3 高于 191 ✗（1/3，另两个 +7 / −12）；BC(500) 对 concat ≥ 2/3 为正 ✗（0/3）；BC(1000) 600–1300 ✗（394）；BC(2000) 1100–1700 ✗（809）。"BC 不发散"只在 Q 意义上平凡成立，策略照样塌。
+按预注册规则：**BC(500) = 239 < 300 → 交叉点是数据信息量的性质**。
+**必须修正上一批的 FACT**：上一批写"target_only 在小 N_t 的失败是 IQL critic 发散，不是信息不够"。现在 BC 的 actor 不碰 critic，在 500 上同样塌成 105 步 / vx 0.8。critic 发散仍是事实（Q 10⁴–10⁷），但它不是 return 塌的充分解释：500 条从 8 条轨迹里随机稀疏抽出的 transition 撑不起一个可模仿的策略。"source 稳住了 critic"这句降为推断（λ 扫描的 (c) 条给了它部分支持，但 return 没跟上）。正确表述：N_t ≤ 1000 时目标数据单独（IQL 或 BC）都学不出能走的策略；concat 的 431–503 高于两者，但与 N_t 无关，更像源策略零样本迁移的水平——λ = 1（纯源）对照未做，不能定。BC 对 IQL target_only：2000 上 −907 / −275 / +52 → 价值学习在 2000 有贡献；5000 上 2/3 相差 ≤ 300 → 接近。
+
+**(2) λ 扫描（hopper gravity 0.5，L = (1−λ)·mean_target + λ·mean_source，V / Q / actor 共用）**
+
+| N_t | λ = 0 | 1/8 | 1/4 | 1/2 | 参照 target_only | 参照 concat |
+|---|---|---|---|---|---|---|
+| 5000 | 1998 / 1661 / 2005 = **1888 ± 161** | 802 / 632 / 712 = 716 ± 70 | 605 / 741 / 1281 = 876 ± 292 | 489 / 608 / 534 = 544 ± 49 | 1915 ± 130 | 503 ± 65 |
+| 1000 | 194 / 845 / 690 = 576 ± 278 | 546 / 390 / 587 = 508 ± 85 | 1170 / 418 / 869 = 819 ± 309 | 418 / 466 / 490 = 458 ± 30 | 513 ± 404 | 431 ± 25 |
+
+辅助量：5000：λ = 0 回合 512–551 步 / vx 2.4 / Q 330（= target_only）；λ = 1/8 回合 177–397 步 / vx 1.1–1.7，源环境 return 1327–1371（策略已经变得会在源里跑）；1/4 回合 233–291；1/2 回合 183–244（= concat）；Q 全部有界 330–334。1000：λ = 0 的 Q −1631 / 820 / 250（seed 0 发散、106 步）；λ ≥ 1/8 的 6 个 run Q 330–347 全部有界，回合 173–359 步。
+判据：5000 上没有 λ > 0 赢（716、876 ≪ 1888）；1000 上 1/4 均值最高（819）但不达判据（未超过 576 + 278 = 854；seed 1 的 418 低于 λ = 1/2 的 466），1/8 也不达。
+对预注册：5000：λ = 0 ✓、1/8 ✗（716 < 1000）、1/4 ✓、1/2 ✓；"单调" ✗（1/8 < 1/4，但 sd 重叠）。1000：λ = 0 "多数 seed 发散" ✗（1/3）；1/2 ✓；"1/8 可能同时高于两端点" ✗。
+判读：(a) **5000 上任何正的源权重都是净损害**：1/8 的损失份额就把目标 return 从 1888 砍到 716（−62%，归一化 62.1 → 22.7）。(b) λ = 1/2 复现 concat（544 vs 503）；λ = 0 ≈ target_only（1888 vs 1915）→ 每步 128 还是 256 条目标样本无影响，"目标批大小"对照排除。(c) 1000 上 λ ≥ 1/8 让 critic 有界（6/6，λ = 0 为 2/3），即小权重源数据确实稳住 critic，但 return 没有超过噪声的收益。(d) 新问题：为什么 1/8 的损失权重就有 62% 的损失？两个竞争解释——价值函数被源 transition（不同动力学下的 s′）污染 vs actor 的加权 BC 被源动作拉偏；分离实验 = λ 只加在 critic / 只加在 actor（第三批候选，N_t = 5000、λ = 1/8、2 臂 × 3 seed = 6 run）。
+
+**(3) 六格面板（5000 条目标、medium 源；hopper gravity 格复用 Gate O2 + BC）**
+
+| 格 | target_only（归一化） | concat（归一化） | BC（归一化） | Δ = target_only − concat（逐 seed） | BC − target_only | 判定 |
+|---|---|---|---|---|---|---|
+| hopper gravity 0.5 | 1915 ± 130（59.6） | 503 ± 65（16.2） | 1720 ± 295（53.6） | +1527 / +1381 / +1329 | −114 / −488 / +15 | **target_only** |
+| hopper friction 0.5 | 1227 ± 81（38.4） | 770 ± 102（24.4） | 1108 ± 116（34.8） | +439 / +264 / +666 | −144 / +124 / −337 | **target_only** |
+| halfcheetah gravity 0.5 | −140 ± 83（1.4） | 3552 ± 114（39.1） | −204 ± 76（0.8） | −3741 / −3640 / −3696 | −206 / +70 / −57 | **concat** |
+| halfcheetah friction 0.5 | 2163 ± 496（32.0） | 4458 ± 212（62.0） | 772 ± 123（13.8） | −3199 / −1907 / −1779 | −767 / −1959 / −1447 | **concat** |
+| walker2d gravity 0.5 | 1826 ± 84（35.0） | 1723 ± 308（33.0） | 1492 ± 223（28.6） | +42 / −293 / +561 | −189 / −521 / −294 | 平 |
+| walker2d friction 0.5 | 2343 ± 363（55.3） | 2706 ± 373（63.9） | 2119 ± 62（50.0） | −696 / +557 / −952 | +241 / −774 / −139 | 平 |
+
+归一化用 ODRL `envs/infos.py` 的各格 REF_MIN / MAX。辅助量：回合长度 hopper friction target_only 334–459 vs concat 188–265；halfcheetah 恒 1000；walker2d gravity 607–681 vs 661–739；walker2d friction 508–935 vs 584–769。源环境 return：concat 在每格都会跑源（hopper friction 1375–1600、halfcheetah 4405–5295、walker2d 2442–3163），target_only 除 walker2d friction（2516–2930）外都不会。Q 全部有界（288–720）。目标数据本身：halfcheetah gravity 每步 4.30、friction 6.92（5 × 1000 步，文件无 timeouts 标记）；hopper friction 9 段 1038–4277；walker2d gravity 7 段 126–3445；walker2d friction 文件只有 1 个 terminal（65 + 17168，实际约 5 段无标记）。
+对预注册：hopper friction target_only 3/3 ✓；walker2d 两格 3/3 ✗（2/3 与 1/3，判平）；halfcheetah 翻转 ✓（把握最低的一条成立，而且不是打平是 concat 大胜）；BC：hopper friction 与 IQL 差 ≤ 300 ✓（2/3）、walker2d ✗、halfcheetah 低于 IQL ✓。
+按预注册判读：target_only 赢 2/6（hopper 两格），concat 赢 2/6（halfcheetah 两格），平 2/6（walker2d 两格）。"≥ 4/5 新格" ✗ → **"固定混合协议净收益为负"只能写 hopper；结论以环境为条件**：G_reuse = target_only − concat 的符号随环境变——hopper 负（−1412 / −456）、halfcheetah 正（+3692 / +2295）、walker2d 零（+103 / −364，均在 seed sd 内）。
+不事后解释，只记录伴随事实供第三批预注册：halfcheetah 两格的 target_only 与 BC 都弱（gravity 格两者 ≈ 0，目标数据单独学不出会跑的策略；friction 格 BC 772），hopper 两格 target_only 强（38–60）。候选假设 H：G_reuse 与 target-only 自身水平负相关（目标数据能学出强策略时复用有害，学不出时复用有益）；walker2d 居中。这是 6 个点上的归纳（SYNTHESIS），要第三批设计来检验（例如在 halfcheetah 上加目标数据量、在 hopper 上减，看符号是否随 target-only 水平翻转）。
+
+**halfcheetah 格为什么 target_only ≈ 0（诊断 job 203009，`odrl/check_halfcheetah.py`，seed 0 的三个 actor）**：
+- gravity 0.5 的目标数据里行为策略是**翻着跑的**：pitch |obs[1]| 均值 4.25 rad、最大 5.32，从不接近 0，vx 均值 4.53。BC actor 在数据上的动作 MSE 0.0001（拟合完美），但评估从直立 reset 开始，直立状态不在数据支撑内：rollout 第 11–215 步翻倒、77–94% 的步 |pitch| > 1.5、vx 0.04–0.15、return −63 / −250。concat 的策略直立跑（vx 3.20，17% 翻倒步，源数据覆盖直立奔跑）。
+- friction 0.5 的目标数据 pitch 均值 0.90、最大 1.45（低头跑但不翻），vx 7.18；target_only 到 vx 1.53、17% 翻倒步、1299；concat vx 4.44、0% 翻倒、4103。
+- 所以 halfcheetah 两格 G_reuse 为正的直接原因是**目标数据不覆盖评估起始分布**（gravity 格完全不覆盖直立态；friction 格覆盖薄），源数据补上了这段支撑——这正是诊断线三条件里的 support 条件，这次出现在"目标数据 vs 评估分布"而不是"源 vs 目标"上。FACT：数据 pitch 统计、拟合 MSE、翻倒步数；INFERENCE：hopper 两格 target_only 强是因为目标数据覆盖从 reset 起的直立跳跃（hopper 有终止，数据天然从 reset 附近开始）。
+- 候选假设 H 据此改写为可测的 **H′：G_reuse 的符号由目标数据对评估起始分布的覆盖决定**；覆盖量可以直接量（reset 态到目标数据的最近邻距离 / 数据里 |pitch| < 0.5 的比例），第三批可以在 6 格上算这个量并与 Δ 对照，再在 halfcheetah 上做干预（把目标数据换成含直立段的子集或加 reset 附近的目标 transition）。
+
+**第二批改变了什么**：memory 与"总判断 v2"里"源数据净有害"是 hopper 特异的，不能跨环境写；主线问题"有限目标数据已能提供有用行为时复用是否值得"在六格上的回答是"看环境"，而"目标数据能否单独提供有用行为"正是分化的那个条件。
+
 ## 待做
 
 - [x] Experiment 1 多 seed（`toy/run_toy_seeds.sbatch`，按 seed 拆 array，每格 ~300 s CPU）
@@ -915,7 +968,8 @@ target_only 均值 1915.4 ± 129.6（归一化 59.6 ± 4.0），concat 502.9 ± 
 - [x] Gate O2 六个基线 run：决策表第一行（target_only 1915 ± 130 vs concat 503 ± 65，concat = 文献 IQL）
 - [x] 训练强度对照 target_only 250k 步（job 202850）：1686 ± 145，仍 +1065…+1356 高于 concat
 - [x] 第一批：N_t 扫描 + BC（jobs 202868 / 202869）：交叉点在 1000–2000 之间，小 N_t 的 target_only 失败 = IQL critic 发散，BC(5000) ≈ IQL target_only
-- [ ] 第二批（已批，预注册见上）：BC 沿 N_t 轴 9 run + λ 扫描 24 run + 六格面板 45 run；第三批：DARA（G_repair / G_reuse）
+- [x] 第二批（jobs 202913 / 202914 / 202915）：BC(500) 也塌 → 交叉点是数据信息量；5000 上任何 λ > 0 净损害、1000 上无 λ 达判据；六格：hopper 2 格 target_only 赢、halfcheetah 2 格 concat 赢、walker2d 2 格平
+- [ ] 第三批候选（待批）：λ 分离（critic / actor）6 run；λ = 1 纯源对照 3 run；假设 H 的检验设计；DARA（G_repair / G_reuse）
 - [x] 原文协议核对：同 500K 步 / 128 + 128 / 同超参，两篇都无 target-only 基线用 D4RL 原始 `next_observations` 键或重模拟替代 `qlearning_dataset` 的 `observations[i+1]`；把速度裁剪行从真值探针里剔除后重算 Gate R / C 的 rho
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
