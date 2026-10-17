@@ -668,6 +668,64 @@ target 均值 189.6 ± 112.3（oracle_state 67.9 ± 39.4、concat 289.0、random
 
 **判断**：方法线维持关闭。对诊断线新增第四条：在 ODRL hopper friction 2.0 perfect-support 设定上，oracle 级别的动态 gap 过滤没有决策价值（Bellman oracle ≈ concat ≈ random），而且 gap 硬过滤（oracle 或 DARA）在 keep 0.5 下不是无益而是有害（Q 发散），机制候选是终止 transition 被系统性删除。限制：主终点动态范围 94–191 步；要做一个有检出力的 Gate O 需要换设定（轨迹级目标数据、更多目标数据或更轻的 shift），这是范围变更，由用户决定。keep 0.25 / 0.75 敏感性按评注只在出现趋势时做，没有趋势，不做。
 
+## 第四份评注后的审计与正对照（2026-10-16；先查代码、评估已有模型，再起小训练）
+
+评注的核心：Gate O 混合了数据构造、筛选导致的覆盖变化和训练稳定性，不足以否定 dynamics-aware transfer；最该先查的是 terminal 行的 `s'` 语义。
+
+**代码审计（读 `odrl/oracle.py`、`algo/offline_offline/score_iql.py`、ODRL `train.py` / `utils.py` / `iql.py` / `dataset/call_dataset.py`，FACT）**
+
+| 评注的疑点 | 本仓库实际情况 |
+|---|---|
+| state gap 的 source 一端是数据数组还是重模拟 | **数据数组**：`gap = ‖ns_t − d['next_observations']‖/scale`，`d` 来自 `d4rl.qlearning_dataset`，它用 `observations[i+1]` 当 `s'`；terminal 行的 `s'` 是下一回合的 reset 状态。评注的嫌疑成立，下面用全量重模拟审计量化 |
+| `TimeLimit` 计数 | 排除：`step_full` 走 `env.unwrapped.step`，不经过 wrapper |
+| paired 目标集的 reward / terminal 来源 | 目标 simulator 的 `step` 返回值，不沿用 source |
+| source mask / score / buffer 行号对齐 | 由构造保证：ODRL `train.py` 的源 buffer = `convert_D4RL(d4rl.qlearning_dataset(src_eval_env))`，与 `source_dataset` 是同一调用；`score_iql` 另有长度断言 |
+| `reward` / `not_done` 形状 | 都是 `[N, 1]`，`set_buffer` 与 `convert_D4RL` 同键同形 |
+| d = 1 ⇒ y = r | ODRL `iql.py`：`value_target = reward + not_done * discount * v_t` |
+| 未筛选的新 learner 与原 IQL 一致 | `ScoreIQL` 只重写 `prepare`，`train` 调 `super().train`；`source = concat` 且无 `target_file` 时 buffer 原样不动 |
+| ODRL IQL 的 actor | advantage-weighted **MSE 到均值动作**（`exp_adv * (tanh(mu) − a)²`，clamp 100），不是官方 IQL 的加权 log-likelihood；`train.py` 没有 locomotion reward normalization（只有 antmaze 的 −1）；lam 0.7、temp 3.0、batch 128 + 128 |
+| Gate O 的 `dara` arm | 是 **DARA-score hard filtering**（按 logit D_SAS − logit D_SA 硬保留 50%），不是 ODRL 的 DARA（reward correction）；下文一律改称 DARA-score hard filter，它的失败不能报告为 DARA 失败 |
+| Gate O 与 LoDADA | 全局 50% 硬删 ≠ LoDADA 的按 cluster 保留 + critic weighting + target 行为正则（评注记载保留比例 90/80/70%，arXiv HTML 正文未见数值，**未核对**） |
+| ODRL 公开 `dara.py` 的 classifier（Softmax 后再 cross_entropy、输入噪声 std 1.0） | 与本仓库无关：识别 gate 和 Gate O 的分类器都是 `adaptation/` 自实现（logit 输出 + BCE），没有用 ODRL 的 classifier |
+
+**正对照 1：oracle V_t 自己的 actor（`odrl/gate_o_vt_eval.py`，FACT）**。V_t 是在全部 402k 条 paired 目标 transition 上 target-only 训练的 IQL（job 202761）。它的 actor 在目标环境 10 回合全部 104–116 步摔倒（return 254、vx 1.31、最低 z 0.71–0.92），在 **source** 环境却跑满 1000 步（return 2691、vx 1.69）。V(s₀) ≈ 80，而它自己策略在目标里实现的折现回报 G₀ = 133–146，source 里 215–233；轨迹上 corr(V, G) 目标 0.35–0.74、source ≈ 0。读法：**拿到最好的一步目标数据（perfect support、402k、目标物理）也学不出目标行为**；AWR 提取只能在 source 的 (s, a) 上重加权，paired 数据没有后继状态处的动作覆盖（评注第五节），V_t 也不是校准的参考价值。这个装置没有正对照。
+
+**正对照 2：benchmark 这一格本身（FACT）**。ODRL 自带的 `hopper_friction_2.0_medium.hdf5`：5000 行、36 个完整回合、**每回合 137–139 步、return 332–339、最低 z 0.71**、vx 1.41——采数据的 "medium" SAC 策略自己在 2 倍摩擦下 138 步必摔，数据里没有一步持续跳跃的示范。LoDADA Table 1（arXiv 2602.21072v1，2026-10-16 核对）hopper friction 2.0：BOSA 10.32 ± 0.06、IQL 10.15 ± 0.03、DARA 10.15 ± 0.06、IGDF 10.35 ± 0.60、OTDF 10.52 ± 0.29、LoDADA 10.44 ± 0.13，折回原始 return 305–317，**都低于数据本身的 335**；ODRL 论文（2410.20750）locomotion 目标数据 = 5000 transitions（FACT）。所以"所有策略 ~290 摔倒"是这一格的性质：选它做 Gate O 是因为一步 gap 好排序，但它没有适配收益的空间，整条方法线的生死不能押在这一格上。
+
+**预注册（写于读 job 202816 / 202815 / 202817 / 202822 / 202823 结果之前）**
+
+- *A 审计（`odrl/gate_o_audit.py`，job 202816，全部 401,598 条 source 在 source 物理里重模拟）*：预测 nonterminal 行 ‖s'_data − s'_sim‖ 中位 < 10⁻³（标准化单位），只有速度触到 ±10 裁剪的行例外；**terminal 行中位 ≫ 1**（reset 状态 vs 摔倒后状态）；D4RL 原始 `next_observations` 键在 terminal 行与重模拟一致（误差小）；gap_data 与 gap_sim 在 nonterminal 行上 Spearman > 0.99；用 gap_sim 以 50% 保留时 terminal 保留 20–60%（接触大 gap 但不会全删），而 gap_data 下是 0。
+- *C 等数量随机加回（`oracle_state_rand`，job 202815，oracle_state mask + 1639 条随机被删 nonterminal）*：预测仍像 oracle_state 一样发散（≥ 2/3 seed Q 量级 ≥ 10³、target < 100），即补回 terminal 的作用是特异的，不是"多补一点数据"。
+- *修正 arm（`oracle_state_sim` = −gap_sim，job 202817，afterok 审计）*：预测 3/3 seed 不再灾难性发散（held-out Q 在 ±300 内）、source return 1000–3000、target 200–300 ≈ concat / random，仍不满足原判据。
+- *参考跑（`odrl/run_gate_o_reference.sbatch`，ODRL 真实目标 5000 条轨迹数据；job 202822 concat = 原版 IQL，job 202823 target_only）*：预测两者 target return 都在 250–340（120–140 步摔倒），都不会持续跳跃，因为数据本身只示范摔倒。
+- 若 A 证实 terminal 语义问题而修正 arm 不发散，则"gap 硬过滤有害"的机制改写为：**oracle_state 的 terminal 全删是 D4RL 数据语义造成的人为效应**，不是物理 gap 的性质；DARA-score hard filter 的 terminal 偏低（0.0013）另有解释（分类器学到 terminal 行的 s' 像 reset 状态 → 判为 source）需单独说明。
+
+**A 审计结果（job 202816，FACT）**
+
+| 类别 | n | ‖s'_data − s'_sim‖ 中位 / p90 / max | ‖raw next_obs − s'_sim‖ 中位 / max | gap_data 中位 | gap_sim 中位 | 50% 保留率 data | 50% 保留率 sim |
+|---|---|---|---|---|---|---|---|
+| nonterminal | 336,247 | 0.000 / 0.000 / 0.018 | 0.000 / 0.018 | 0.028 | 0.028 | 0.55 | 0.46 |
+| nonterminal，速度触 ±10 裁剪 | 63,712 | 0.088 / 0.300 / 2.108 | 0.088 / 2.108 | 0.122 | 0.000 | 0.24 | 0.70 |
+| terminal | 1,448 | **6.911 / 8.647 / 12.732** | **0.000 / 0.000** | 6.903 | 0.000 | **0.00** | 0.59 |
+| terminal，裁剪 | 191 | 7.620 / 10.105 / 12.527 | 0.119 / 1.010 | 7.620 | 0.000 | 0.00 | 0.87 |
+
+reward 与 terminal 一致性：|r − r_sim| 中位 0（max 0.19，只在裁剪行），d ≠ d_sim 比例 0.0000–0.0052。原始 D4RL 有 402,000 行、402 个 timeout、1639 个 terminal；`qlearning_dataset` 丢 timeout 行得 401,598 行，`observations[i+1]` 与原始 `next_observations` 键在 99.59% 的行一致，不一致的正是 1639 个 terminal 行。
+
+读法：
+1. **评注的嫌疑完全成立**：terminal 行的 `s'_data` 是下一回合的 reset 状态，与重模拟差 7–13 个标准差；D4RL 原始 `next_observations` 键在这些行与重模拟完全一致（0.000），是 `qlearning_dataset` 把它丢了。oracle_state 删光 terminal 是数据语义造成的人为效应。
+2. **我之前的推断是错的**：我写过"摔倒 = 重接触 = gap 大"。真实物理 gap 在 terminal 行的中位是 **0.000**（63% 的 terminal 行 gap_sim < 0.01）；进入终止的那一步大多没有摩擦敏感的接触。修正后的 50% 保留会留下 1015 / 1639 条 terminal（62%，高于基础率）。预注册预测 20–60%，实际 62%，方向对、量偏高。
+3. **新发现一个更大的测量限制**：15.9% 的 source 行有速度分量触到 Hopper-v3 的 ±10 观测裁剪（63,903 行），这些状态从观测重建不回去，重建误差中位 0.088、p90 0.30、max 2.1 标准差。对它们 gap_data 被重建误差污染（中位 0.122 vs 像物理的 0.000），gap_data 下只保留 24%、gap_sim 下保留 70%。这同样影响前面所有用 `ground_truth.py` 从观测重建再走一步的"真值 gap"（Gate R 的 flip rate、Gate C 的 rho）：对裁剪行真值是在错误状态上算的。它不偏向任何估计器，但 rho 的上限被它压低，写作时要作为限制说明，或把裁剪行从探针里剔除后重算。
+4. gap_data 与 gap_sim 的整体 Spearman 只有 0.73，但在未裁剪、非 terminal、两者都 > 0.01 的行上是 1.000（n 179861）；低值来自 48% 的行 gap_sim 恰为 0（空中相位，并列名次随机打破）和裁剪行。两套 50% mask 的 Jaccard 0.736；keep_sim 的 terminal 比例 0.0051（基础率 0.0041）、裁剪行比例 0.222（基础率 0.159）。
+5. 对 DARA-score hard filter 的 terminal 偏低（0.0013）现在有了更直接的解释：D_SAS 在 source 看到 1639 条 `s'` = reset 状态的行，目标 paired 集里没有这种 `s'`，所以这些行被判为强 source → 分数低 → 被删。
+
+**结论改写（按评注第十节，替代 "Gate O 结果 A → 方法线关闭" 的强版本）**
+
+> Gate O 未达到预注册的收益判据。该结果只适用于当前 paired-target、全局 50% hard-selection、ODRL-IQL（MSE actor、无 reward normalization）协议，且这一 benchmark 格的目标数据本身只示范摔倒、文献中所有方法都在 10.2–10.5。由于 terminal 行的 `s'` 语义问题、参考价值 V_t 未校准、所有稳定组目标控制均差、以及没有任何正对照，**本实验不能作为 dynamics-aware data reuse 无效的证据**。
+
+保留两个独立判断：(i) cluster 方法：estimator 层没有证据优于连续 conditional estimator，暂停扩展合理；(ii) occupancy-confounding 诊断：核心问题成立，下一步是验证"识别修正如何进入一个不破坏学习数据结构的训练目标"（reward correction 而非硬删除），不是继续假定正确 score 必须通过硬删除体现收益。
+
+同时降调三处旧表述：次终点 Bellman 残差是模型自身的内部一致性 |r + γ(1−d)V_θ(s') − Q_θ|，不是对真值的误差，不能写成"Q 更贴近目标"；"290 只是生存步数"改为"return 主要受生存时间限制，同时受速度与控制代价影响，更晚摔倒是合法改善，必须同时报速度"；诊断线的 held-out CE 只是 H(D|Z) 的上界（CE = H + E KL），两个分类器的 CE 差还含各自拟合误差，报告时把"统计诊断"与"精确识别了信息量"分开。
+
 ## 待做
 
 - [x] Experiment 1 多 seed（`toy/run_toy_seeds.sbatch`，按 seed 拆 array，每格 ~300 s CPU）
@@ -675,7 +733,8 @@ target 均值 189.6 ± 112.3（oracle_state 67.9 ± 39.4、concat 289.0、random
 - [x] ODRL 侧：`odrl/`（数据、probe-state 真值、Exp 2/3 评估），hopper 数据已在 `dataset/mujoco/`
 - [x] Gate R（`odrl/resolution.py`，K / h / feature 扫描）、Gate 2 + Gate S（`odrl/detectability.py`）、1b 复现 seed 3–5
 - [x] halfcheetah Gate R / S / P（h = 1）；perfect-support 目标（`paired_<g>`）；friction 轴 Gate R + paired；Δs 聚类；N_t 扫描；归一化估计器 + 确认跑；20000 步消融
-- [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：结果 A；机制检验 job 202812 已读（terminal 删除是主因非全部）
+- [x] Gate O（oracle 下游 IQL，hopper friction 2.0）：未达判据；oracle_state 的 terminal 全删是 D4RL `qlearning_dataset` 语义的人为效应（第四份评注审计），不是物理 gap 的性质
+- [ ] 第四份评注：读 A 审计 / C 随机加回 / 修正 arm / 参考跑的结果并写回；第三阶段（DARA 原形式 reward correction vs hard filter）只在前两阶段通过后做
 - [ ] 多步结果（h = 5–20）的 Gate P / C；早停 / 正则下的分类器预算；写作
 - [ ] `odrl/evaluate_ratio.py` 的 kmeans 用目标 s' 按维标准化，`local_occ_iql.py` 还是原始尺度，下游阶段要统一
 - [ ] `local_occ_iql.py` 目前是 quantile hard filter，downstream 阶段再换 `exp_weights`
